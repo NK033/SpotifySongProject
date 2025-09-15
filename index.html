@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Playlist Chatbot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Sarabun', sans-serif;
+        }
+
+        .dark-theme {
+            --bg-primary: #0d1117;
+            --bg-secondary: #1a202c;
+            --text-primary: #e2e8f0;
+            --border-color: #2d3748;
+            --chat-bubble-ai: #2d3748;
+        }
+
+        .light-theme {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f3f4f6;
+            --text-primary: #1f2937;
+            --border-color: #d1d5db;
+            --chat-bubble-ai: #e5e7eb;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        .song-item-card {
+            border-color: var(--border-color);
+        }
+
+        .dark-theme .song-item-card {
+            background-color: #1a202c;
+        }
+
+        .light-theme .song-item-card {
+            background-color: #f9fafb;
+        }
+    </style>
+</head>
+
+<body class="dark-theme transition-colors duration-300">
+
+    <!-- Main Container -->
+    <div class="flex h-screen overflow-hidden bg-[var(--bg-primary)]">
+
+        <!-- Sidebar -->
+        <div id="sidebar-overlay" class="fixed inset-0 bg-black opacity-50 z-40 hidden md:hidden"></div>
+        <div id="sidebar"
+            class="fixed z-50 top-0 left-0 h-full w-64 bg-[var(--bg-secondary)] transform -translate-x-full transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:w-64">
+            <div class="flex flex-col h-full p-4">
+                <div class="flex items-center justify-between pb-4 border-b border-[var(--border-color)]">
+                    <div class="flex items-center space-x-2">
+                        <i class="fas fa-robot text-green-400"></i>
+                        <h2 class="text-[var(--text-primary)] text-lg font-semibold">AI Playlist</h2>
+                    </div>
+                    <button id="sidebar-close-btn" class="md:hidden text-gray-400 hover:text-white transition-colors">
+                        <i class="fas fa-times"></i> </button>
+                </div>
+
+                <div class="mt-4 flex flex-col items-center">
+                    <img id="user-avatar" src="https://placehold.co/100x100/1DB954/ffffff?text=U" alt="User Avatar"
+                        class="w-16 h-16 rounded-full mb-2">
+                    <span id="user-display-name"
+                        class="text-lg font-medium text-[var(--text-primary)] break-words w-full text-center">User</span>
+                    <button id="spotify-login-button"
+                        class="mt-4 w-full py-2 px-4 rounded-full font-medium transition-colors bg-green-500 text-white hover:bg-green-600">
+                        <i class="fab fa-spotify mr-2"></i> เข้าสู่ระบบด้วย Spotify
+                    </button>
+                    <button id="spotify-logout-button"
+                        class="mt-2 w-full py-2 px-4 rounded-full font-medium transition-colors bg-red-500 text-white hover:bg-red-600 hidden">
+                        <i class="fas fa-sign-out-alt mr-2"></i> ออกจากระบบ Spotify
+                    </button>
+                </div>
+
+                <div class="flex-grow"></div>
+                <div class="mt-4 pt-4 border-t border-[var(--border-color)]">
+                    <button id="theme-toggle-button"
+                        class="w-full flex items-center justify-between py-2 px-4 rounded-lg text-gray-300 hover:bg-opacity-50 hover:bg-gray-500 transition-colors">
+                        <span id="theme-icon-text"><i class="fas fa-sun mr-2"></i> โหมดกลางวัน</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Main Area -->
+        <div class="flex flex-col flex-1 bg-[var(--bg-primary)] transition-colors duration-300 overflow-hidden">
+            <div
+                class="flex-shrink-0 p-4 border-b border-[var(--border-color)] flex justify-between items-center bg-[var(--bg-secondary)] md:hidden">
+                <h1 class="text-[var(--text-primary)] text-lg font-semibold">AI Playlist Chatbot</h1>
+                <button id="sidebar-toggle-button" class="text-gray-400 hover:text-white transition-colors"> <i
+                        class="fas fa-bars"></i> </button>
+            </div>
+
+            <div id="chat-history" class="flex-1 overflow-y-auto p-4 md:p-8 space-y-4">
+                <div class="flex items-start">
+                    <div class="w-10 h-10 rounded-full flex-shrink-0 mr-3"><i
+                            class="fas fa-robot text-4xl text-green-500"></i></div>
+                    <div class="flex-1">
+                        <div class="bg-[var(--chat-bubble-ai)] p-3 rounded-xl rounded-tl-none max-w-lg shadow">
+                            <p class="text-sm">สวัสดีครับ! ผมคือ AI ที่จะช่วยคุณค้นหา วิเคราะห์ และสร้างเพลย์ลิสต์เพลง
+                                ลองพิมพ์บอกผมได้เลยครับ</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 md:p-8 flex-shrink-0">
+                <div class="relative flex items-center">
+                    <input type="text" id="user-input" placeholder="พิมพ์ข้อความของคุณ..."
+                        class="w-full p-4 pl-4 pr-16 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors duration-300 text-[var(--text-primary)]">
+                    <button id="send-button"
+                        class="absolute right-2 text-white bg-green-500 rounded-full h-10 w-10 flex items-center justify-center hover:bg-green-600 transition-colors duration-300">
+                        <i class="fas fa-paper-plane"></i> </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="flex flex-col items-center p-6 rounded-lg bg-gray-800 text-white shadow-lg">
+            <div class="animate-spin rounded-full h-12 w-12 border-4 border-green-500 border-t-transparent"></div>
+            <p class="mt-4 text-sm font-medium">กำลังโหลด...</p>
+        </div>
+    </div>
+
+    <script type="module">
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebar-overlay');
+        const sidebarToggle = document.getElementById('sidebar-toggle-button');
+        const sidebarCloseBtn = document.getElementById('sidebar-close-btn');
+        const chatHistory = document.getElementById('chat-history');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        const spotifyLoginButton = document.getElementById('spotify-login-button');
+        const spotifyLogoutButton = document.getElementById('spotify-logout-button');
+        const userDisplayNameElem = document.getElementById('user-display-name');
+        const userAvatarElem = document.getElementById('user-avatar');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const themeToggleButton = document.getElementById('theme-toggle-button');
+        const themeIconText = document.getElementById('theme-icon-text');
+
+        let isFetching = false;
+        let currentTheme = localStorage.getItem('theme') || 'dark';
+
+        function showLoading(show) { loadingOverlay.classList.toggle('hidden', !show); }
+        function openSidebar() { sidebar.classList.remove('-translate-x-full'); sidebarOverlay.classList.remove('hidden'); }
+        function closeSidebar() { sidebar.classList.add('-translate-x-full'); sidebarOverlay.classList.add('hidden'); }
+
+        function toggleTheme() {
+            currentTheme = document.body.classList.contains('dark-theme') ? 'light' : 'dark';
+            applyTheme(currentTheme);
+            localStorage.setItem('theme', currentTheme);
+        }
+        function applyTheme(theme) {
+            document.body.className = `${theme}-theme transition-colors duration-300`;
+            themeIconText.innerHTML = theme === 'light' ? `<i class="fas fa-moon mr-2"></i> โหมดกลางคืน` : `<i class="fas fa-sun mr-2"></i> โหมดกลางวัน`;
+        }
+
+        function getSongCard(song) {
+            const imageUrl = song.album?.images?.[0]?.url || 'https://placehold.co/100x100/1DB954/ffffff?text=♫';
+            const artistName = song.artists?.map(a => a.name).join(', ') || 'ศิลปินไม่ทราบชื่อ';
+            const songName = song.name || 'เพลงไม่ทราบชื่อ';
+            const spotifyUrl = song.external_urls?.spotify || '#';
+            return `<div class="song-item-card p-3 rounded-lg border flex items-center space-x-4 mb-2"><img src="${imageUrl}" alt="Album Art" class="w-16 h-16 rounded-lg object-cover"><div class="flex-1 text-left"><div class="font-semibold">${songName}</div><div class="text-sm opacity-80">${artistName}</div></div><a href="${spotifyUrl}" target="_blank" class="flex-shrink-0 py-2 px-4 rounded-full font-medium transition-colors bg-green-500 text-white hover:bg-green-600"><i class="fab fa-spotify"></i></a></div>`;
+        }
+
+        // โค้ดใหม่ที่แก้ไขแล้ว
+        function renderMessage(htmlContent, isUser = false) {
+            const bubble = document.createElement('div');
+            // 1. เพิ่ม class ที่ต้องมีทุกครั้งไปก่อน
+            bubble.classList.add('flex', 'items-start');
+
+            // 2. ใช้ if ตรวจสอบเพื่อเพิ่ม class 'justify-end' เฉพาะเมื่อ isUser เป็น true
+            if (isUser) {
+                bubble.classList.add('justify-end');
+            }
+
+            const messageBody = isUser ?
+                `<div class="bg-green-500 p-4 rounded-xl rounded-tr-none max-w-xl shadow"><p class="text-sm text-white">${htmlContent}</p></div>` :
+                `<div class="w-10 h-10 rounded-full flex-shrink-0 mr-3"><i class="fas fa-robot text-4xl text-green-500"></i></div><div class="flex-1"><div class="bg-[var(--chat-bubble-ai)] p-4 rounded-xl rounded-tl-none max-w-xl shadow">${htmlContent}</div></div>`;
+
+            bubble.innerHTML = messageBody;
+            chatHistory.appendChild(bubble);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        function handleSpotifyLogin() { window.location.href = '/spotify_login'; }
+
+        function handleSpotifyLogout() {
+            localStorage.removeItem('spotify_access_token');
+            localStorage.removeItem('spotify_display_name');
+            localStorage.removeItem('spotify_avatar');
+            localStorage.removeItem('spotify_expires_at');
+            setTimeout(() => {
+                updateUIForLoginState();
+            }, 0);
+            renderMessage('<p class="text-sm">ออกจากระบบ Spotify แล้ว</p>');
+        }
+
+        // index.html (โค้ดที่แก้ไขแล้ว)
+        async function getUserProfile(accessToken) {
+            try {
+                // แก้ไข URL ให้เรียกมาที่ Backend ของเราเอง
+                const response = await fetch('/me', {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+
+                if (!response.ok) {
+                    // ถ้า Token หมดอายุหรือมีปัญหา Server จะตอบกลับมา
+                    throw new Error('Failed to fetch profile from backend');
+                }
+
+                const profile = await response.json();
+                localStorage.setItem('spotify_display_name', profile.display_name);
+                if (profile.images && profile.images.length > 0) {
+                    // แก้ไขให้ปลอดภัยขึ้น ตรวจสอบว่ามีรูปภาพจริง
+                    localStorage.setItem('spotify_avatar', profile.images[0].url);
+                }
+                return true;
+            } catch (error) {
+                console.error('Error fetching profile, logging out:', error);
+                handleSpotifyLogout();
+                return false;
+            }
+        }
+
+        function updateUIForLoginState() {
+            const displayName = localStorage.getItem('spotify_display_name');
+            const avatar = localStorage.getItem('spotify_avatar');
+            const isLoggedIn = !!localStorage.getItem('spotify_access_token') && !!displayName;
+
+            userDisplayNameElem.textContent = displayName || 'User';
+            userAvatarElem.src = avatar || 'https://placehold.co/100x100/1DB954/ffffff?text=U';
+            spotifyLoginButton.classList.toggle('hidden', isLoggedIn);
+            spotifyLogoutButton.classList.toggle('hidden', !isLoggedIn);
+        }
+
+        async function sendMessageToBackend() {
+            if (isFetching || userInput.value.trim() === '') return;
+            const userMessage = userInput.value.trim();
+            renderMessage(userMessage, true);
+            userInput.value = '';
+            isFetching = true;
+            showLoading(true);
+
+            // --- 1. สร้าง Object ที่จะส่งก่อน ---
+            const requestBody = {
+                message: userMessage,
+                spotify_access_token: localStorage.getItem('spotify_access_token'),
+                spotify_refresh_token: localStorage.getItem('spotify_refresh_token'),
+                expires_at: parseInt(localStorage.getItem('spotify_expires_at'), 10)
+            };
+
+            // --- 2. แสดงข้อมูลใน Popup **ก่อน** ที่จะส่ง ---
+            alert("กำลังจะส่งข้อมูลนี้ไปให้ Server:\n\n" + JSON.stringify(requestBody, null, 2));
+
+            try {
+                // --- 3. แก้ไข body ให้ใช้ตัวแปรที่เพิ่งสร้าง ---
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Server error');
+                }
+                const data = await response.json();
+                // --- เพิ่มโค้ดส่วนนี้เข้าไป ---
+                if (data.new_spotify_token_info) {
+                    console.log("Token was refreshed. Updating localStorage.");
+                    localStorage.setItem('spotify_access_token', data.new_spotify_token_info.access_token);
+                    // Spotify อาจจะส่ง refresh_token ใหม่มาด้วยหรือไม่ก็ได้ ถ้าส่งมาก็อัปเดต
+                    if (data.new_spotify_token_info.refresh_token) {
+                        localStorage.setItem('spotify_refresh_token', data.new_spotify_token_info.refresh_token);
+                    }
+                }
+                console.log('Backend response:', data); // <-- เพิ่มบรรทัดนี้
+                let aiResponseHTML = `<p class="text-sm whitespace-pre-wrap">${data.ai_response || data.response || ''}</p>`;
+                if (data.songs_found) {
+                    aiResponseHTML += `<div class="mt-4">${data.songs_found.map(getSongCard).join('')}</div>`;
+                }
+                renderMessage(aiResponseHTML);
+            } catch (error) {
+                renderMessage(`<p class="text-sm">ขออภัยค่ะ เกิดข้อผิดพลาด: ${error.message}</p>`);
+            } finally {
+                isFetching = false;
+                showLoading(false);
+            }
+        }
+
+        async function initializeApp() {
+            applyTheme(currentTheme);
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const accessToken = urlParams.get('access_token');
+
+            if (accessToken) {
+                localStorage.setItem('spotify_access_token', accessToken);
+
+                const expiresIn = urlParams.get('expires_in');
+                const refreshToken = urlParams.get('refresh_token');
+                const expiresAt = Date.now() + (parseInt(expiresIn, 10) * 1000);
+                localStorage.setItem('spotify_access_token', accessToken);
+                localStorage.setItem('spotify_expires_at', expiresAt); // <-- บันทึกเวลาหมดอายุ
+                if (refreshToken) {
+                    localStorage.setItem('spotify_refresh_token', refreshToken);
+                }
+                // Clean the URL to remove the tokens
+                window.history.replaceState({}, document.title, "/");
+
+                // Fetch profile and wait for it to finish before updating the UI
+                const profileFetched = await getUserProfile(accessToken);
+                if (profileFetched) {
+                    renderMessage('<p class="text-sm">เข้าสู่ระบบ Spotify สำเร็จแล้ว!</p>');
+                }
+            }
+
+            // This will now run AFTER the profile has been fetched and stored
+            updateUIForLoginState();
+
+            // Attach all event listeners at the end
+            sendButton.addEventListener('click', sendMessageToBackend);
+            userInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessageToBackend(); });
+            sidebarToggle.addEventListener('click', openSidebar);
+            sidebarCloseBtn.addEventListener('click', closeSidebar);
+            sidebarOverlay.addEventListener('click', closeSidebar);
+            spotifyLoginButton.addEventListener('click', handleSpotifyLogin);
+            spotifyLogoutButton.addEventListener('click', handleSpotifyLogout);
+            themeToggleButton.addEventListener('click', toggleTheme);
+        }
+
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+
+</html>
