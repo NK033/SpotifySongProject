@@ -10,7 +10,7 @@ from genius_api import get_lyrics
 from lyrics_analysis import analyze_lyrics
 
 # ตั้งค่า Gemini API
-genai.configure(api_key=Config.GEMINI_API_KEY)
+
 
 async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
     """

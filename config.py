@@ -14,6 +14,8 @@ class Config:
     SPOTIPY_REDIRECT_URI: str = os.getenv("SPOTIPY_REDIRECT_URI")
     FRONTEND_APP_URL: str = os.getenv("FRONTEND_APP_URL")
     GENIUS_API_KEY: str = os.getenv("GENIUS_API_KEY") # เพิ่ม Genius API Key
+    LASTFM_API_KEY: str = os.getenv("lastfm_api_key") # เพิ่ม Last.fm API Key
+    LASTFM_API_SECRET: str = os.getenv("lastfm_api_key_secret") # เพิ่ม Last.fm API Secret
 
     @classmethod
     def validate(cls):
