@@ -1,10 +1,12 @@
 # main.py (Final Hybrid Recommender System - User's Structure with Added Try/Except)
 import asyncio
 import json
+import os
 import random
+import joblib
 import traceback
 import spotipy
-from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_fallback_recommendations
+from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_fallback_recommendations, get_personalized_recommendations
 import google.generativeai as genai
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException, Request, status
@@ -36,6 +38,19 @@ from spotify_api import (
     search_spotify_songs,
 )
 from verifier import batch_verify_songs
+
+# --- Global Model Loading ---
+MODEL_ARTIFACTS_DIR = os.path.join("archive", "ml_artifacts")
+try:
+    similarity_model = joblib.load(os.path.join(MODEL_ARTIFACTS_DIR, "similarity_model.joblib"))
+    scaler = joblib.load(os.path.join(MODEL_ARTIFACTS_DIR, "scaler.joblib"))
+    dataset_df = joblib.load(os.path.join(MODEL_ARTIFACTS_DIR, "processed_dataset.joblib"))
+    print("✅ Custom similarity model loaded successfully!")
+except FileNotFoundError:
+    print("⚠️ Custom similarity model not found. Recommendations will be disabled. Please run train_similarity_model.py.")
+    similarity_model = None
+    scaler = None
+    dataset_df = None
 
 # --- Setup ---
 Config.validate()
@@ -115,18 +130,89 @@ def calculate_cosine_similarity(vec1, vec2):
 
 async def build_user_taste_profile(sp_client: spotipy.Spotify):
     """
-    สร้างโปรไฟล์รสนิยมของผู้ใช้ (เวอร์ชัน Workaround: ไม่เรียกใช้ audio-features)
+    สร้างโปรไฟล์รสนิยมของผู้ใช้โดยการวิเคราะห์ Audio Features จาก Top 50 Tracks
     """
-    # พยายามดึง Top tracks เพื่อตรวจสอบว่าผู้ใช้มีประวัติการฟังหรือไม่
-    top_tracks = await get_user_top_tracks(sp_client, limit=50)
-    if not top_tracks:
-        print("User has no top tracks, returning None for taste profile.")
+    print("Building user taste profile from top tracks...")
+    try:
+        # 1. ดึงเพลงโปรด 50 อันดับแรก
+        top_tracks = await get_user_top_tracks(sp_client, limit=50)
+        if not top_tracks:
+            print("User has no top tracks, cannot build taste profile.")
+            return None
+
+        track_ids = [track['id'] for track in top_tracks if track and track.get('id')]
+        
+        # 2. ดึง Audio Features ของเพลงเหล่านั้น
+        # (ต้อง import get_audio_features_for_tracks เข้ามาใน main.py ด้วย)
+        features_list = await get_audio_features_for_tracks(sp_client, track_ids)
+        
+        if not features_list:
+            print("Could not retrieve audio features for top tracks.")
+            return None
+
+        # 3. คำนวณค่าเฉลี่ยของแต่ละ Feature เพื่อสร้างโปรไฟล์
+        profile = {
+            'danceability': np.mean([f['danceability'] for f in features_list]),
+            'energy': np.mean([f['energy'] for f in features_list]),
+            'valence': np.mean([f['valence'] for f in features_list]),
+            'acousticness': np.mean([f['acousticness'] for f in features_list]),
+            'instrumentalness': np.mean([f['instrumentalness'] for f in features_list]),
+            'speechiness': np.mean([f['speechiness'] for f in features_list]),
+            'tempo': np.mean([f['tempo'] for f in features_list]),
+        }
+        print(f"  -> Taste profile built successfully: {profile}")
+        return profile
+
+    except Exception as e:
+        print(f"Error building user taste profile: {e}")
         return None
     
-    # เนื่องจากบัญชีนี้มีปัญหาในการเรียก audio-features
-    # เราจะคืนค่า None ไปเสมอ เพื่อให้ระบบหลักเข้าสู่ Fallback System ที่แข็งแกร่งกว่าแทน
-    print("Skipping audio-features due to account restrictions. Returning None for taste profile.")
-    return None
+async def get_hybrid_recommendations(sp_client: spotipy.Spotify) -> list[dict]:
+    """
+    สร้างเพลงแนะนำโดยใช้โมเดล NearestNeighbors ที่เราเทรนเอง
+    """
+    if not similarity_model or dataset_df is None:
+        return []
+
+    print("   --> Using Custom Hybrid Recommendation Engine...")
+    try:
+        # 1. ดึงเพลงโปรดของผู้ใช้เป็นจุดเริ่มต้น
+        top_tracks = await get_user_top_tracks(sp_client, limit=5)
+        if not top_tracks: return []
+
+        # 2. หา Feature ของเพลงเหล่านั้นจาก Dataset ของเรา
+        seed_track_ids = [t['id'] for t in top_tracks]
+        seed_vectors = dataset_df[dataset_df['id'].isin(seed_track_ids)]
+        
+        if seed_vectors.empty:
+            print("     -> None of the user's top tracks are in our dataset.")
+            return []
+
+        # 3. เลือก Feature, Scale, และหาค่าเฉลี่ยเพื่อสร้าง "เวกเตอร์รสนิยม"
+        feature_cols = [col for col in dataset_df.columns if col.startswith(('audio_', 'lyric_', 'genre_'))]
+        
+        # จัดการกรณีที่คอลัมน์ไม่ตรงกัน
+        model_feature_cols = [col for col in feature_cols if col in seed_vectors.columns]
+        
+        seed_vectors_scaled = scaler.transform(seed_vectors[model_feature_cols].fillna(0))
+        user_taste_vector = np.mean(seed_vectors_scaled, axis=0).reshape(1, -1)
+
+        # 4. ใช้โมเดลหาเพลงที่ "ใกล้เคียง" ที่สุด
+        distances, indices = similarity_model.kneighbors(user_taste_vector)
+        
+        # 5. ดึง ID เพลงแนะนำและตัดเพลงที่เป็น seed ออก
+        recommended_ids = dataset_df.iloc[indices[0]]['id'].tolist()
+        final_recommendations = [rec_id for rec_id in recommended_ids if rec_id not in seed_track_ids]
+
+        # 6. ดึงข้อมูลเพลงเต็มๆ จาก Spotify API เพื่อนำไปแสดงผล
+        if not final_recommendations: return []
+        results = await asyncio.to_thread(sp_client.tracks, final_recommendations[:10])
+        return results['tracks']
+        
+    except Exception as e:
+        print(f"     -> Error in hybrid recommendation: {e}")
+        traceback.print_exc()
+        return []    
 
     
 
@@ -155,58 +241,35 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
         intent = intent_response.text.strip()
         print(f"AI Intent: {intent}")
         
-         # === PATH 1: Personalized Recommendation (ใช้ Fallback System ใหม่) ===
+          # === PATH 1: Personalized Recommendation (ใช้ Custom Hybrid Model) ===
         if "get_recommendations" in intent:
             if not token:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
+            if not similarity_model:
+                return ChatResponse(response="ขออภัยค่ะ ระบบแนะนำเพลงของฉันยังไม่พร้อมใช้งานในขณะนี้")
 
             try:
-                # สร้าง Spotipy client และ User ID
-                token_info = {
-                    "access_token": token,
-                    "refresh_token": chat_request.spotify_refresh_token,
-                    "scope": SPOTIFY_SCOPES,
-                    "expires_at": chat_request.expires_at / 1000 if chat_request.expires_at else 0
-                }
+                token_info = { "access_token": token, "refresh_token": chat_request.spotify_refresh_token, "scope": SPOTIFY_SCOPES, "expires_at": chat_request.expires_at / 1000 if chat_request.expires_at else 0 }
                 sp_client = create_spotify_client(token_info)
-                user_profile_data = await get_user_profile(sp_client)
-                user_id = user_profile_data.get('id')
 
-                if not user_id:
-                    return ChatResponse(response="ขออภัยค่ะ ไม่สามารถดึงข้อมูล User ID ของคุณจาก Spotify ได้")
+                recommended_songs = await get_hybrid_recommendations(sp_client)
 
-                # ตรวจสอบว่ามี Mood Profile อยู่ในฐานข้อมูลแล้วหรือยัง
-                mood_profile = await get_user_mood_profile(user_id)
-
-                if mood_profile:
-                    print(f"User profile found for {user_id}, using mood-based ranking.")
-                    # TODO: ในอนาคต เราจะใส่ Logic การจัดอันดับเพลงโดยใช้ mood_profile ที่ตรงนี้
-                    pass
-                else:
-                    print(f"User profile not found for {user_id}. Triggering background analysis.")
-                    background_tasks.add_task(analyze_user_taste_profile_background, sp_client, user_id)
-                
-                # --- ส่วนที่แก้ไข: เรียกใช้ระบบ Fallback ใหม่ ---
-                print("   --> Using smart fallback recommendation system...")
-                recommended_songs = await get_fallback_recommendations(sp_client) 
-                
                 if not recommended_songs:
-                    return ChatResponse(response="ขออภัยค่ะ มีปัญหาในการดึงเพลงแนะนำในขณะนี้ ลองใหม่อีกครั้งนะคะ")
+                    return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้ ลองฟังเพลงให้หลากหลายขึ้นแล้วกลับมาใหม่นะคะ")
 
-                # --- ส่วนการนำเสนอผลลัพธ์ ---
+                # (ส่วนของ Presentation และการส่ง Response เหมือนเดิม)
                 presentation_model = genai.GenerativeModel("gemini-1.5-flash")
                 songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in recommended_songs])
-                presentation_prompt = f"The user asked for a general recommendation. You found these songs: {songs_for_prompt}. Present them in a friendly way in Thai. If a background task was started, you can also mention that you are analyzing their taste for next time."
+                presentation_prompt = f"จากการวิเคราะห์รสนิยมของคุณ นี่คือเพลย์ลิสต์พิเศษที่โมเดลของฉันสร้างขึ้นเพื่อคุณโดยเฉพาะครับ:\n\n{songs_for_prompt}\n\nโปรดนำเสนอรายการเพลงเหล่านี้ในรูปแบบที่เป็นกันเอง (ภาษาไทย)"
                 final_response = await presentation_model.generate_content_async(presentation_prompt)
                 
-                # ตรวจสอบว่ามีการ Refresh Token หรือไม่ก่อนส่ง Response
                 new_token_info = sp_client.auth_manager.get_cached_token()
                 if new_token_info and new_token_info.get("access_token") != token:
                     return ChatResponse(response=final_response.text, songs_found=recommended_songs, new_spotify_token_info=new_token_info)
                 else:
                     return ChatResponse(response=final_response.text, songs_found=recommended_songs)
-
-            except spotipy.exceptions.SpotifyException as e:
+            
+            except Exception as e:
                 if e.http_status in [401, 403]:
                     return ChatResponse(response="การเชื่อมต่อกับ Spotify ของคุณหมดอายุแล้ว 🕒 กรุณาลองออกจากระบบและเข้าสู่ระบบใหม่อีกครั้งครับ")
                 else:

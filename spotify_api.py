@@ -9,6 +9,8 @@ import time
 
 from config import Config
 
+
+
 SPOTIFY_SCOPES = "user-read-private user-read-email playlist-modify-public playlist-modify-private user-library-read user-top-read user-read-recently-played"
 
 # --- ฟังก์ชันจัดการการยืนยันตัวตน ---
@@ -195,3 +197,44 @@ async def get_fallback_recommendations(sp_client: spotipy.Spotify) -> list[dict]
         print(f"Tier 4 failed: {e}")
 
     return []
+
+async def get_personalized_recommendations(sp_client: spotipy.Spotify, taste_profile: dict, limit: int = 10) -> list[dict]:
+    """
+    สร้างเพลงแนะนำส่วนตัวโดยอิงจากโปรไฟล์รสนิยมและเพลงโปรดของผู้ใช้
+    """
+    try:
+        # 1. หา "เมล็ดพันธุ์" จากเพลงและศิลปินโปรดของผู้ใช้
+        top_tracks = await get_user_top_tracks(sp_client, limit=5)
+        top_artists = await asyncio.to_thread(sp_client.current_user_top_artists, limit=2)
+
+        seed_track_ids = [track['id'] for track in top_tracks if track and track.get('id')]
+        seed_artist_ids = [artist['id'] for artist in top_artists['items'] if artist and artist.get('id')]
+        
+        # Spotify อนุญาตให้ใช้ seed รวมกันได้ไม่เกิน 5 อย่าง
+        # เราจะให้น้ำหนักกับเพลงมากกว่า
+        final_seed_tracks = seed_track_ids[:3]
+        final_seed_artists = seed_artist_ids[:2]
+
+        if not final_seed_tracks and not final_seed_artists:
+            print("  -> No seeds found for personalized recommendations.")
+            return []
+
+        # 2. สร้างพารามิเตอร์เป้าหมายจากโปรไฟล์รสนิยม
+        target_params = {
+            f"target_{key}": value for key, value in taste_profile.items()
+        }
+
+        # 3. เรียก API recommendations
+        print(f"  -> Calling recommendations with seeds (tracks: {len(final_seed_tracks)}, artists: {len(final_seed_artists)}) and targets.")
+        results = await asyncio.to_thread(
+            sp_client.recommendations,
+            seed_tracks=final_seed_tracks,
+            seed_artists=final_seed_artists,
+            limit=limit,
+            **target_params
+        )
+        return results['tracks'] if results else []
+        
+    except Exception as e:
+        print(f"  -> Error during personalized recommendation: {e}")
+        return []

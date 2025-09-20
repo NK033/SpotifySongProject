@@ -1,143 +1,114 @@
+# update_model.py (Metadata & Lyrics ONLY Version - Faster & Resilient)
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import pandas as pd
 import os
-import time
 import asyncio
-import sys
+from tqdm import tqdm
+import string
 
-# เพิ่ม Path ของโฟลเดอร์ archive เข้าไปใน sys.path
-# เพื่อให้ Python สามารถหาไฟล์ train_model และ spotify_api เจอ
-sys.path.append(os.path.join(os.path.dirname(__file__), 'archive'))
-
-# Import สิ่งที่จำเป็นจากโปรเจกต์ของเรา
 from config import Config
-from archive.train import train_recommendation_model # แก้ไข: ชื่อไฟล์คือ train_model.py
-from spotify_api import get_audio_features_for_tracks
+from genius_api import get_lyrics
+from custom_model import predict_moods
 
 # --- การตั้งค่า ---
-# กำหนด Path ไปยังโฟลเดอร์ archive
 ARCHIVE_DIR = "archive"
-DATASET_PATH = os.path.join(ARCHIVE_DIR, "dataset.csv") # แก้ไข: ชื่อไฟล์คือ tracks.csv
 ARTIFACTS_DIR = os.path.join(ARCHIVE_DIR, "ml_artifacts")
-DATASET_DF_PATH = os.path.join(ARTIFACTS_DIR, "processed_dataset.joblib")
+RAW_DATASET_PATH = os.path.join(ARCHIVE_DIR, "spotify_tracks_raw.csv")
+FINAL_DATASET_PATH = os.path.join(ARTIFACTS_DIR, "final_dataset.csv") # <-- เปลี่ยนชื่อไฟล์ให้ชัดเจน
+BATCH_SIZE = 100 # <-- เพิ่ม Batch Size ได้ เพราะทำงานเร็วขึ้น
 
+async def update_dataset():
+    print("--- 🚀 Starting Metadata & Lyrics Dataset Creation ---")
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
-async def update_dataset_and_retrain():
-    """
-    สคริปต์หลักสำหรับหาเพลงใหม่, อัปเดต Dataset, และเทรนโมเดลใหม่
-    """
-    print("--- 🤖 เริ่มกระบวนการอัปเดตโมเดลอัตโนมัติ ---")
-
-    # --- 1. เชื่อมต่อ Spotify ด้วย Client Credentials ---
-    try:
-        print("กำลังเชื่อมต่อกับ Spotify...")
-        auth_manager = SpotifyClientCredentials(
-            client_id=Config.SPOTIPY_CLIENT_ID,
-            client_secret=Config.SPOTIPY_CLIENT_SECRET
-        )
-        sp_client = spotipy.Spotify(auth_manager=auth_manager)
-        print("เชื่อมต่อสำเร็จ!")
-    except Exception as e:
-        print(f"!!! Error: ไม่สามารถเชื่อมต่อ Spotify ได้: {e}")
-        return
-
-    # --- 2. โหลด Dataset ที่มีอยู่ ---
-    print("กำลังโหลด Dataset ที่มีอยู่...")
-    if os.path.exists(DATASET_PATH):
-        df_existing = pd.read_csv(DATASET_PATH)
-        existing_ids = set(df_existing['track_id'])
-        print(f"พบเพลงใน Dataset เดิม {len(existing_ids)} เพลง")
+    # 1. เชื่อมต่อ Spotify และโหลดข้อมูลเก่า
+    auth_manager = SpotifyClientCredentials(client_id=Config.SPOTIPY_CLIENT_ID, client_secret=Config.SPOTIPY_CLIENT_SECRET)
+    sp_client = spotipy.Spotify(auth_manager=auth_manager)
+    
+    if os.path.exists(RAW_DATASET_PATH):
+        df_existing = pd.read_csv(RAW_DATASET_PATH)
+        existing_ids = set(df_existing['id'])
     else:
-        print(f"!!! Warning: ไม่พบไฟล์ Dataset เดิม จะทำการสร้างใหม่")
         df_existing = pd.DataFrame()
         existing_ids = set()
+    print(f"Loaded {len(existing_ids)} existing tracks.")
 
-    # --- 3. หาเพลงใหม่จาก Category 'toplists' (วิธีที่เสถียรกว่า) ---
-    print("กำลังค้นหาเพลงใหม่จากหมวดหมู่ 'toplists'...")
-    new_tracks_to_process = []
-    try:
-        # ดึงเพลย์ลิสต์จากหมวดหมู่ 'toplists' ซึ่งมีความน่าเชื่อถือสูง
-        category_playlists = sp_client.category_playlists(category_id='toplists', country='US', limit=5)
-        for item in category_playlists['playlists']['items']:
-            if not item: continue
-            playlist_id = item['id']
-            tracks = sp_client.playlist_items(playlist_id, limit=20)
-            for track_item in tracks['items']:
-                track = track_item.get('track')
-                if track and track.get('id') and track['id'] not in existing_ids:
-                    new_tracks_to_process.append(track)
-                    existing_ids.add(track['id'])
-        print(f"พบเพลงใหม่ (เมล็ดพันธุ์) ที่ยังไม่มีใน Dataset จำนวน {len(new_tracks_to_process)} เพลง")
-    except Exception as e:
-        print(f"!!! Error: ไม่สามารถดึงเพลงจาก Category Playlists ได้: {e}")
-        if not new_tracks_to_process:
-            print("--- ไม่พบเพลงใหมที่จะอัปเดต สิ้นสุดการทำงาน ---")
-            return
-            
-    # --- 4. เก็บข้อมูล Audio Features และจัดรูปแบบ ---
-    if not new_tracks_to_process:
-        print("--- ไม่มีเพลงใหม่ที่จะประมวลผล สิ้นสุดการทำงาน ---")
+    # 2. ค้นหาเพลงใหม่ (เหมือนเดิม)
+    genre_queries = ["Thai Pop", "T-Pop", "Thai Indie", "Pop", "Rock", "Hip-Hop", "R&B", "J-Pop", "J-Rock", "K-Pop", "Anime", "Sad Songs", "Happy Hits"]
+    alphabet_queries = list(string.ascii_lowercase)
+    all_search_queries = genre_queries + alphabet_queries
+    
+    new_tracks = {}
+    for query in tqdm(all_search_queries, desc="Searching Playlists"):
+        try:
+            results = sp_client.search(q=query, type='playlist', limit=10)
+            if not results or not results['playlists']['items']: continue
+            for playlist in results['playlists']['items']:
+                if not playlist: continue
+                try:
+                    tracks = sp_client.playlist_items(playlist['id'], limit=50)
+                    for item in tracks['items']:
+                        track = item.get('track')
+                        if track and track.get('id') and track.get('id') not in existing_ids:
+                            new_tracks[track['id']] = track
+                except Exception: continue
+        except Exception: continue
+
+    if not new_tracks:
+        print("--- No new tracks found. Exiting. ---")
         return
-        
-    print("กำลังดึงข้อมูล Audio Features ของเพลงใหม่...")
-    new_track_ids = [track['id'] for track in new_tracks_to_process]
-    
-    audio_features_list = await get_audio_features_for_tracks(sp_client, new_track_ids)
+    print(f"Found {len(new_tracks)} new tracks.")
 
-    new_rows = []
-    features_map = {f['id']: f for f in audio_features_list if f}
+    # 3. สกัด Feature (เฉพาะ Metadata และ Lyrics) และบันทึกแบบ Batch
+    batch_rows = []
+    track_items = list(new_tracks.items())
     
-    for track in new_tracks_to_process:
-        features = features_map.get(track['id'])
-        if not features: continue
+    for track_id, track_data in tqdm(track_items, desc="Extracting Features"):
+        row = {'id': track_id, 'name': track_data['name'], 
+               'popularity': track_data['popularity'],
+               'artist_name': track_data['artists'][0]['name'], 
+               'artist_id': track_data['artists'][0]['id']}
         
         try:
-            artist_info = sp_client.artist(track['artists'][0]['uri'])
-            genre = artist_info['genres'][0] if artist_info['genres'] else 'unknown'
-        except:
-            genre = 'unknown'
+            artist_info = sp_client.artist(track_data['artists'][0]['id'])
+            row['artist_genres'] = ",".join(artist_info.get('genres', []))
+        except Exception: 
+            row['artist_genres'] = ""
 
-        new_rows.append({
-            'track_id': track['id'],
-            'artists': ', '.join([artist['name'] for artist in track['artists']]),
-            'album_name': track['album']['name'],
-            'track_name': track['name'],
-            'popularity': track['popularity'],
-            'duration_ms': track['duration_ms'],
-            'explicit': track['explicit'],
-            'danceability': features.get('danceability'),
-            'energy': features.get('energy'),
-            'key': features.get('key'),
-            'loudness': features.get('loudness'),
-            'mode': features.get('mode'),
-            'speechiness': features.get('speechiness'),
-            'acousticness': features.get('acousticness'),
-            'instrumentalness': features.get('instrumentalness'),
-            'liveness': features.get('liveness'),
-            'valence': features.get('valence'),
-            'tempo': features.get('tempo'),
-            'time_signature': features.get('time_signature'),
-            'track_genre': genre
-        })
+        lyrics = await get_lyrics(row['artist_name'], row['name'])
+        known_moods = ['sadness', 'joy', 'love', 'anger', 'fear', 'surprise']
+        if lyrics:
+            moods = predict_moods(lyrics)
+            for mood in known_moods: row[f'lyric_{mood}'] = 1 if mood in moods else 0
+        else:
+            for mood in known_moods: row[f'lyric_{mood}'] = 0
+        
+        batch_rows.append(row)
+        
+        if len(batch_rows) >= BATCH_SIZE:
+            df_batch = pd.DataFrame(batch_rows)
+            df_batch.to_csv(RAW_DATASET_PATH, mode='a', header=not os.path.exists(RAW_DATASET_PATH), index=False)
+            batch_rows = []
 
-    if not new_rows:
-        print("--- ไม่สามารถประมวลผลเพลงใหม่ได้ สิ้นสุดการทำงาน ---")
-        return
+    if batch_rows:
+        df_batch = pd.DataFrame(batch_rows)
+        df_batch.to_csv(RAW_DATASET_PATH, mode='a', header=not os.path.exists(RAW_DATASET_PATH), index=False)
 
-    # --- 5. อัปเดตไฟล์ CSV ---
-    print(f"กำลังเพิ่มเพลงใหม่ {len(new_rows)} เพลงลงใน {DATASET_PATH}...")
-    df_new = pd.DataFrame(new_rows)
-    df_updated = pd.concat([df_existing, df_new], ignore_index=True)
-    df_updated.to_csv(DATASET_PATH, index=False)
-    print("อัปเดตไฟล์ CSV สำเร็จ!")
+    print("--- Raw data collection complete. Now processing final dataset. ---")
 
-    # --- 6. สั่งเทรนโมเดลใหม่อีกครั้ง ---
-    print("\n--- 🚀 กำลังเริ่มเทรนโมเดลใหม่ด้วย Dataset ที่อัปเดตแล้ว ---")
-    train_recommendation_model()
+    # 4. สร้าง Final Dataset
+    df_raw = pd.read_csv(RAW_DATASET_PATH)
+    df_final = df_raw.copy()
+    
+    if 'artist_genres' in df_final.columns:
+        df_final['artist_genres'] = df_final['artist_genres'].fillna('')
+        df_final = pd.concat([df_final.drop('artist_genres', axis=1), 
+                              df_final['artist_genres'].str.get_dummies(sep=',').add_prefix('genre_')], axis=1)
 
-    print("\n--- ✅ อัปเดตและเทรนโมเดลใหม่สำเร็จ! ---")
-
+    df_final.to_csv(FINAL_DATASET_PATH, index=False)
+    print(f"✅ Final dataset created at {FINAL_DATASET_PATH}")
+    print("--- You can now run train_similarity_model.py ---")
 
 if __name__ == "__main__":
-    asyncio.run(update_dataset_and_retrain())
+    asyncio.run(update_dataset())

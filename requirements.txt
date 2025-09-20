@@ -110,3 +110,5 @@ wcwidth==0.2.13
 webdataset==0.2.111
 websockets==15.0.1
 wget==3.2
+soundfile==0.13.1
+spotipy==2.25.1
