@@ -167,71 +167,121 @@ async def build_user_taste_profile(sp_client: spotipy.Spotify):
         print(f"Error building user taste profile: {e}")
         return None
     
-async def get_hybrid_recommendations(sp_client: spotipy.Spotify) -> list[dict]:
+async def get_hybrid_recommendations(sp_client: spotipy.Spotify) -> tuple[list[dict], str]:
     """
-    สร้างเพลงแนะนำโดยใช้โมเดล NearestNeighbors ที่เราเทรนเอง
+    สร้างเพลงแนะนำด้วยระบบไฮบริด 3 ขั้นตอน (พร้อมแยกแยะ Niche User)
     """
-    if not similarity_model or dataset_df is None:
-        return []
+    if not similarity_model or dataset_df is None or scaler is None:
+        return [], "error"
 
-    print("   --> Using Custom Hybrid Recommendation Engine...")
+    print("   --> Using Final 3-Stage Hybrid Recommendation Engine...")
     try:
-        # 1. ดึงเพลงโปรดของผู้ใช้เป็นจุดเริ่มต้น
+        # --- จุดเริ่มต้น: ดึงเพลงโปรดของผู้ใช้ ---
         top_tracks = await get_user_top_tracks(sp_client, limit=5)
-        if not top_tracks: return []
-
-        # 2. หา Feature ของเพลงเหล่านั้นจาก Dataset ของเรา
-        seed_track_ids = [t['id'] for t in top_tracks]
-        seed_vectors = dataset_df[dataset_df['id'].isin(seed_track_ids)]
         
-        if seed_vectors.empty:
-            print("     -> None of the user's top tracks are in our dataset.")
-            return []
+        # --- ตรวจสอบเงื่อนไข "ผู้ใช้ใหม่" (Cold Start) ก่อน ---
+        if not top_tracks:
+            print("     -> User is a true Cold Start. Activating Plan C.")
+            # (ส่วนของ Plan C จะถูกเรียกใช้จากด้านล่าง)
+            pass
+        else:
+            # --- ถ้ามีประวัติการฟัง ให้เริ่มแผน A หรือ B ---
+            seed_track_ids = [t['id'] for t in top_tracks]
+            seed_vectors_df = dataset_df[dataset_df['id'].isin(seed_track_ids)]
+            search_queries = []
 
-        # 3. เลือก Feature, Scale, และหาค่าเฉลี่ยเพื่อสร้าง "เวกเตอร์รสนิยม"
-        feature_cols = [col for col in dataset_df.columns if col.startswith(('audio_', 'lyric_', 'genre_'))]
-        
-        # จัดการกรณีที่คอลัมน์ไม่ตรงกัน
-        model_feature_cols = [col for col in feature_cols if col in seed_vectors.columns]
-        
-        seed_vectors_scaled = scaler.transform(seed_vectors[model_feature_cols].fillna(0))
-        user_taste_vector = np.mean(seed_vectors_scaled, axis=0).reshape(1, -1)
+            if not seed_vectors_df.empty:
+                # --- แผน A ---
+                print("     -> Found user's tracks in dataset. Proceeding with Plan A.")
+                method = "plan_a"
+                # (โค้ดของ Plan A เหมือนเดิม)
+                feature_cols = [col for col in dataset_df.columns if col.startswith(('genre_', 'lyric_')) or col == 'popularity']
+                model_feature_cols = [col for col in feature_cols if col in seed_vectors_df.columns]
+                seed_vectors_scaled = scaler.transform(seed_vectors_df[model_feature_cols].fillna(0))
+                user_taste_vector = np.mean(seed_vectors_scaled, axis=0).reshape(1, -1)
+                distances, indices = similarity_model.kneighbors(user_taste_vector, n_neighbors=5)
+                taste_profile_songs = dataset_df.iloc[indices[0]]
+                seed_artists = list(taste_profile_songs['artist_name'].unique())[:3]
+                genre_cols = [col for col in taste_profile_songs.columns if col.startswith('genre_')]
+                top_genres = taste_profile_songs[genre_cols].sum().nlargest(2).index.str.replace('genre_', '').tolist()
+                if seed_artists: search_queries.append(f"artist:{' artist:'.join(seed_artists)}")
+                if top_genres: search_queries.append(f"genre:\"{top_genres[0]}\"")
+                if len(top_genres) > 1: search_queries.append(f"genre:\"{top_genres[1]}\"")
 
-        # 4. ใช้โมเดลหาเพลงที่ "ใกล้เคียง" ที่สุด
-        distances, indices = similarity_model.kneighbors(user_taste_vector)
-        
-        # 5. ดึง ID เพลงแนะนำและตัดเพลงที่เป็น seed ออก
-        recommended_ids = dataset_df.iloc[indices[0]]['id'].tolist()
-        final_recommendations = [rec_id for rec_id in recommended_ids if rec_id not in seed_track_ids]
+            else:
+                # --- แผน B ---
+                print("     -> User's tracks not in dataset. Switching to Plan B (Top Artists).")
+                top_artists = await asyncio.to_thread(sp_client.current_user_top_artists, limit=3)
+                if top_artists and top_artists['items']:
+                    method = "plan_b"
+                    for artist in top_artists['items']:
+                        if artist['genres']: search_queries.append(f"genre:\"{artist['genres'][0]}\"")
+                    artist_names = [artist['name'] for artist in top_artists['items']]
+                    search_queries.append(f"artist:{' artist:'.join(artist_names)}")
+                else:
+                    # --- ถ้าแผน B ล้มเหลว นี่คือ "ผู้ใช้เฉพาะทาง" (Niche User) ---
+                    print("     -> User has tracks but no usable artists. This is a Niche User. Passing to Plan C.")
+                    # คืนค่าสถานะใหม่เพื่อให้ chat_endpoint รู้
+                    return [], "niche_user" 
 
-        # 6. ดึงข้อมูลเพลงเต็มๆ จาก Spotify API เพื่อนำไปแสดงผล
-        if not final_recommendations: return []
-        results = await asyncio.to_thread(sp_client.tracks, final_recommendations[:10])
-        return results['tracks']
+            # --- ถ้าแผน A หรือ B สร้างคำค้นหาได้สำเร็จ ให้ทำ Stage 2 ต่อ ---
+            if search_queries:
+                all_found_songs = {}
+                for query in search_queries:
+                    results = await search_spotify_songs(sp_client, query=query, limit=10)
+                    for song in results:
+                        if song and song.get('id') and song['id'] not in seed_track_ids:
+                            all_found_songs[song['id']] = song
+                if all_found_songs:
+                    final_recommendations = list(all_found_songs.values())
+                    random.shuffle(final_recommendations)
+                    return final_recommendations[:7], method
+
+        # ------------------------------------------------------------------
+        # │ แผน C (Cold Start / Niche User Fallback): จะถูกเรียกใช้เมื่อไม่มี top_tracks หรือเมื่อแผน A/B ล้มเหลว │
+        # ------------------------------------------------------------------
+        final_method = "niche_user" if top_tracks else "cold_start"
+        print(f"     -> Activating Plan C. Reason: {final_method}")
+        try:
+            playlist_query = 'เพลงฮิตประเทศไทย'
+            results = await asyncio.to_thread(sp_client.search, q=playlist_query, type='playlist', limit=1)
+            if not (results and results['playlists']['items'] and results['playlists']['items'][0]):
+                playlist_query = 'Top 50 - Global'
+                results = await asyncio.to_thread(sp_client.search, q=playlist_query, type='playlist', limit=1)
+
+            if results and results['playlists']['items'] and results['playlists']['items'][0]:
+                playlist_id = results['playlists']['items'][0]['id']
+                playlist_tracks = await asyncio.to_thread(sp_client.playlist_items, playlist_id=playlist_id, limit=15)
+                if playlist_tracks and playlist_tracks['items']:
+                    return [item['track'] for item in playlist_tracks['items'] if item and item.get('track')], final_method
+        except Exception as e_cold_start:
+            print(f"     -> Plan C failed: {e_cold_start}")
+            return [], "error"
+
+        return [], "error"
         
     except Exception as e:
         print(f"     -> Error in hybrid recommendation: {e}")
         traceback.print_exc()
-        return []    
+        return [], "error"
 
-    
 
 # --- Main Chat Endpoint ---
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundTasks):
-    
+async def chat_endpoint(chat_request: ChatRequest):
     try:
+        # --- STAGE 0: การจำแนกเจตนาของผู้ใช้ (Intent Classification) ---
+        print("Stage 0: Classifying user intent...")
         user_message = chat_request.message
         token = chat_request.spotify_access_token
-
-        # === STAGE 0: Intent Classification ===
-        print("Stage 0: Classifying user intent...")
+        
+        # ใช้ Gemini เพื่อวิเคราะห์ว่าผู้ใช้ต้องการอะไร
         intent_model = genai.GenerativeModel("gemini-1.5-flash")
         intent_prompt = f"""
         Analyze the user's request. What is the user's primary intent?
         Choose ONE of the following three options:
-        1. "get_recommendations": If the user is asking for music suggestions, discovery, or recommendations.
-        2. "use_a_tool": If the user is asking for a specific action like creating a playlist.
+        1. "get_recommendations": If the user is asking for music suggestions, discovery, recommendations, or a playlist based on their taste.
+        2. "use_a_tool": If the user is asking for a specific action like creating a named playlist with specific songs.
         3. "chat": For all other cases, like greetings, questions about you, or general conversation.
 
         Respond with ONLY one of these three strings.
@@ -240,36 +290,65 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
         intent_response = await intent_model.generate_content_async(intent_prompt)
         intent = intent_response.text.strip()
         print(f"AI Intent: {intent}")
-        
-          # === PATH 1: Personalized Recommendation (ใช้ Custom Hybrid Model) ===
+
+        # --- PATH 1: ระบบแนะนำเพลงอัจฉริยะ (Personalized Recommendations) ---
         if "get_recommendations" in intent:
+            # ตรวจสอบว่าผู้ใช้ล็อกอินหรือยัง
             if not token:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
             if not similarity_model:
                 return ChatResponse(response="ขออภัยค่ะ ระบบแนะนำเพลงของฉันยังไม่พร้อมใช้งานในขณะนี้")
 
             try:
+                # สร้าง Spotify client
                 token_info = { "access_token": token, "refresh_token": chat_request.spotify_refresh_token, "scope": SPOTIFY_SCOPES, "expires_at": chat_request.expires_at / 1000 if chat_request.expires_at else 0 }
                 sp_client = create_spotify_client(token_info)
 
-                recommended_songs = await get_hybrid_recommendations(sp_client)
+                 # --- เรียกใช้ Engine ใหม่ (ที่คืนค่าสถานะได้ละเอียดขึ้น) ---
+                recommended_songs, method = await get_hybrid_recommendations(sp_client)
 
+                # ถ้าหาเพลงไม่เจอเลย แต่มีสถานะ ให้ตอบกลับตามสถานะนั้นๆ
                 if not recommended_songs:
-                    return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้ ลองฟังเพลงให้หลากหลายขึ้นแล้วกลับมาใหม่นะคะ")
+                    if method == "niche_user":
+                        return ChatResponse(response="รสนิยมทางดนตรีของคุณมีเอกลักษณ์และน่าสนใจมากครับ! ขณะนี้ระบบของฉันอาจจะยังมีข้อมูลไม่มากพอสำหรับแนวเพลงที่คุณชอบ แต่เรากำลังเรียนรู้เพิ่มเติมอยู่เสมอครับ")
+                    else:
+                        return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้ ลองฟังเพลงให้หลากหลายขึ้นแล้วกลับมาใหม่นะคะ")
 
-                # (ส่วนของ Presentation และการส่ง Response เหมือนเดิม)
+                # --- ส่วนการนำเสนอผลลัพธ์ (ฉลาดขึ้นตาม Method) ---
                 presentation_model = genai.GenerativeModel("gemini-1.5-flash")
                 songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in recommended_songs])
-                presentation_prompt = f"จากการวิเคราะห์รสนิยมของคุณ นี่คือเพลย์ลิสต์พิเศษที่โมเดลของฉันสร้างขึ้นเพื่อคุณโดยเฉพาะครับ:\n\n{songs_for_prompt}\n\nโปรดนำเสนอรายการเพลงเหล่านี้ในรูปแบบที่เป็นกันเอง (ภาษาไทย)"
+                
+                # สร้าง Prompt ที่แตกต่างกันตามวิธีการแนะนำเพลงที่ใช้
+                if method == "plan_a":
+                    prompt_intro = "จากการวิเคราะห์รสนิยมของคุณอย่างละเอียดด้วยโมเดลของเรา นี่คือเพลย์ลิสต์พิเศษที่ฉันสร้างขึ้นเพื่อคุณโดยเฉพาะครับ:"
+                elif method == "plan_b":
+                    prompt_intro = "จากการดูศิลปินโปรดของคุณ ฉันได้ลองหาเพลงในแนวทางเดียวกันมาให้ลองฟังครับ:"
+                # --- แก้ไขคำพูดตรงนี้ ---
+                elif method == "niche_user":
+                    prompt_intro = "รสนิยมทางดนตรีของคุณมีเอกลักษณ์และน่าสนใจมากครับ! ตอนนี้ฉันอาจจะยังหาเพลงแนวเดียวกับที่คุณชอบเป๊ะๆ ไม่เจอ แต่ระหว่างที่ฉันกำลังเรียนรู้เพิ่มเติม ลองฟังเพลงฮิตเหล่านี้เป็นไอเดียดูไหมครับ:"
+                elif method == "cold_start":
+                    prompt_intro = "ยินดีต้อนรับสู่บริการของเราครับ! เนื่องจากคุณเป็นผู้ใช้ใหม่ เพื่อเป็นการเริ่มต้น ลองฟังเพลงที่กำลังเป็นที่นิยมเหล่านี้ดูก่อนนะครับ:"
+                else: # error case
+                    prompt_intro = "ฉันได้คัดเลือกเพลงแนะนำที่น่าสนใจมาให้คุณลองฟังครับ:"
+
+                presentation_prompt = f"""
+                {prompt_intro}
+
+                รายการเพลง:
+                {songs_for_prompt}
+
+                โปรดนำเสนอรายการเพลงเหล่านี้ในรูปแบบที่เป็นกันเอง อ่านง่าย และเชิญชวนให้ผู้ใช้ลองฟัง (ตอบเป็นภาษาไทย)
+                """
                 final_response = await presentation_model.generate_content_async(presentation_prompt)
                 
+                # ตรวจสอบว่ามีการ Refresh Token หรือไม่ก่อนส่ง Response
                 new_token_info = sp_client.auth_manager.get_cached_token()
                 if new_token_info and new_token_info.get("access_token") != token:
                     return ChatResponse(response=final_response.text, songs_found=recommended_songs, new_spotify_token_info=new_token_info)
                 else:
                     return ChatResponse(response=final_response.text, songs_found=recommended_songs)
             
-            except Exception as e:
+            except spotipy.exceptions.SpotifyException as e:
                 if e.http_status in [401, 403]:
                     return ChatResponse(response="การเชื่อมต่อกับ Spotify ของคุณหมดอายุแล้ว 🕒 กรุณาลองออกจากระบบและเข้าสู่ระบบใหม่อีกครั้งครับ")
                 else:
