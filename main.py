@@ -68,14 +68,31 @@ async def startup_event(): await init_db()
 async def spotify_login_endpoint(): return RedirectResponse(await get_spotify_auth_url())
 
 @app.get("/callback")
-async def spotify_callback_endpoint(request: Request, code: str):
+# --- 1. เพิ่ม background_tasks เข้าไปในฟังก์ชัน ---
+async def spotify_callback_endpoint(request: Request, code: str, background_tasks: BackgroundTasks):
     try:
         tokens = await get_spotify_token(code)
+        
+        # --- 2. เพิ่มส่วนการทำงานเบื้องหลัง ---
+        # สร้าง client ชั่วคราวเพื่อดึง user_id
+        temp_sp_client = create_spotify_client(tokens)
+        user_profile = await get_user_profile(temp_sp_client)
+        user_id = user_profile.get('id')
+
+        if user_id:
+            # สั่งให้เริ่มวิเคราะห์โปรไฟล์ของผู้ใช้คนนี้ทันทีในเบื้องหลัง
+            logging.info(f"User {user_id} logged in. Triggering background profile analysis.")
+            background_tasks.add_task(update_user_profile_background, temp_sp_client, user_id)
+        # --- จบส่วนการทำงานเบื้องหลัง ---
+
+        # ส่งผู้ใช้กลับไปที่หน้าแอปหลักพร้อม token (เหมือนเดิม)
         redirect_url = f"{Config.FRONTEND_APP_URL}?access_token={tokens['access_token']}&refresh_token={tokens.get('refresh_token', '')}&expires_in={tokens['expires_in']}"
         return RedirectResponse(redirect_url)
+        
     except Exception as e:
         logging.error(f"ERROR in callback: {e}")
         return RedirectResponse(f"/?error=spotify_auth_failed")
+
 
 @app.get("/me")
 async def get_current_user_profile(authorization: Annotated[str | None, Header()] = None):

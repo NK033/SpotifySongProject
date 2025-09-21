@@ -5,26 +5,33 @@ import logging
 from collections import Counter
 import random
 # Import local modules
-from spotify_api import get_user_profile, get_user_top_tracks, get_user_recently_played_tracks, get_user_saved_tracks, search_spotify_songs
+from spotify_api import get_user_profile, get_user_top_tracks, get_user_recently_played_tracks, get_user_saved_tracks, search_spotify_songs,get_spotify_track_data
 from lastfm_api import get_similar_tracks, get_chart_top_tracks, get_global_top_tracks, get_artist_top_tracks
 from genius_api import get_lyrics
 from custom_model import predict_moods
-from database import get_song_analysis_from_db, save_song_analysis_to_db, get_user_mood_profile, save_user_mood_profile
+from database import (
+    get_song_analysis_from_db, save_song_analysis_to_db, get_user_mood_profile, 
+    save_user_mood_profile, save_recommendation_history, get_recommendation_history,
+    get_user_feedback
+)
 
-async def build_user_mood_profile(sp_client: spotipy.Spotify) -> dict:
+async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> dict:
     """
-    (เวอร์ชัน Ultimate) วิเคราะห์เพลงจาก Top Tracks, ที่ฟังล่าสุด, และที่กดไลค์
+    (เวอร์ชันเรียนรู้ได้) วิเคราะห์เพลงโดยให้น้ำหนักกับเพลงที่ผู้ใช้เคย 'Like'
     """
-    logging.info("Building comprehensive user mood profile...")
+    logging.info("Building learning user mood profile...")
 
-    # 1. ดึงเพลงจากทั้ง 3 แหล่งพร้อมกัน
+    # 1. ดึง Feedback และเพลงจากแหล่งต่างๆ
+    feedback_data = await get_user_feedback(user_id)
+    liked_uris = feedback_data.get('likes', set())
+
     tasks = [
         get_user_top_tracks(sp_client, limit=10),
         get_user_saved_tracks(sp_client, limit=10),
         get_user_recently_played_tracks(sp_client, limit=5)
     ]
     results = await asyncio.gather(*tasks)
-    top_tracks, liked_tracks, recent_tracks = results
+    top_tracks, saved_tracks, recent_tracks = results
 
     # --- LOG เวอร์ชันใหม่ที่สวยงามและอ่านง่าย ---
     print("\n=============== AI LOG: GATHERING SEED TRACKS ===============")
@@ -41,9 +48,17 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify) -> dict:
     print_track_list("Your Liked (Saved) Tracks", liked_tracks)
     print_track_list("Your Recently Played Tracks", recent_tracks)
     
-    # 2. รวมเพลงและคัดเพลงซ้ำออก
+    # 2. รวมเพลง โดยนำเพลงที่เคย 'Like' เข้ามาด้วย
     all_seed_tracks = {}
-    for track in top_tracks + liked_tracks + recent_tracks:
+    
+    # เพิ่มเพลงที่เคย Like เข้ามาก่อน (อาจจะต้องดึงข้อมูลเพลงเต็มๆ)
+    if liked_uris:
+        liked_track_data = await asyncio.gather(*[get_spotify_track_data(sp_client, uri) for uri in liked_uris])
+        for track in liked_track_data:
+            if track and track.get('uri'):
+                all_seed_tracks[track['uri']] = track
+
+    for track in top_tracks + saved_tracks + recent_tracks:
         if track and track.get('uri') and track['uri'] not in all_seed_tracks:
             all_seed_tracks[track['uri']] = track
 
@@ -55,8 +70,32 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify) -> dict:
     # --- จบส่วน Log ---
 
     if not seed_tracks_list:
-        logging.warning("User has no tracks from any source to build mood profile.")
         return {}
+
+    all_moods = []
+    analysis_tasks = []
+    for track in seed_tracks_list[:12]:
+        async def analyze_single_track(t):
+            lyrics = await get_lyrics(t['artists'][0]['name'], t['name'])
+            if lyrics:
+                predicted = predict_moods(lyrics)
+                return predicted
+            return []
+        analysis_tasks.append(analyze_single_track(track))
+    
+    mood_results = await asyncio.gather(*analysis_tasks)
+    for moods in mood_results:
+        all_moods.extend(moods)
+
+    if not all_moods:
+        return {}
+
+    mood_counts = Counter(all_moods)
+    total_moods = len(all_moods)
+    mood_profile = {mood: count / total_moods for mood, count in mood_counts.items()}
+    
+    logging.info(f"User mood profile created: {mood_profile}")
+    return mood_profile
 
     # 3. วิเคราะห์อารมณ์จากเพลง (ส่วนนี้เหมือนเดิม)
     all_moods = []
@@ -121,29 +160,35 @@ async def analyze_and_cache_song(spotify_track: dict) -> dict:
 
 async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: str) -> list[dict]:
     """
-    (เวอร์ชัน Last.fm ที่ดีที่สุด) กระบวนการแนะนำเพลงที่ยึดตามโปรไฟล์ของผู้ใช้
+    (เวอร์ชันคุมโทนด้วย Mood) แนะนำเพลงโดยยึด "อารมณ์หลัก" ของผู้ใช้เป็นศูนย์กลาง
     """
     # 1. สร้างโปรไฟล์อารมณ์ของผู้ใช้
     user_mood_profile = await get_user_mood_profile(user_id)
     if not user_mood_profile:
-        # หากยังไม่มีโปรไฟล์ ให้สร้างขึ้นมาก่อน
         user_mood_profile = await build_user_mood_profile(sp_client)
         if not user_mood_profile:
             logging.warning("Could not build mood profile. Cannot provide personalized recommendations.")
-            # ถ้ายังสร้างไม่ได้จริงๆ ค่อยใช้แผนสำรอง
-            fallback_tracks_info = await get_chart_top_tracks("Thailand") 
-            # (ในสถานการณ์จริงควรนำ fallback_tracks_info ไป search spotify ต่อ)
+            # ในสถานการณ์จริง ส่วนนี้ควรไปดึงเพลงฮิตติดชาร์ตมาแสดงแทน
             return []
 
-    # 2. รวบรวม "เมล็ดพันธุ์" เพลงทั้งหมด
-    seed_tracks_list = await get_seed_tracks(sp_client)
+    # 2. ค้นหา "อารมณ์หลัก" (Dominant Mood) ของผู้ใช้
+    if not user_mood_profile:
+        dominant_mood = None
+    else:
+        dominant_mood = max(user_mood_profile, key=user_mood_profile.get)
+    
+    print("\n========== AI LOG: DOMINANT USER MOOD ==========")
+    print(f"  User's dominant mood for this playlist is: {str(dominant_mood).upper()}")
+    print("=============================================\n")
 
+    # 3. ค้นหาเพลงตัวเลือกจาก Last.fm (พร้อมแผนสำรอง)
+    seed_tracks_list = await get_seed_tracks(sp_client)
     candidate_tracks_info = []
     seen_tracks = set()
 
-    # --- 3. แผน A: หาเพลงคล้ายกันจากเพลงของผู้ใช้ ---
+    # --- แผน A: หาเพลงคล้ายกันจากเพลงของผู้ใช้ ---
     if seed_tracks_list:
-        logging.info("Executing NEW Plan A: Last.fm Similar Tracks from ALL user's seed tracks.")
+        logging.info("Executing Plan A: Last.fm Similar Tracks from user's seed tracks.")
         tasks = [get_similar_tracks(t['artists'][0]['name'], t['name'], limit=7) for t in seed_tracks_list[:5]]
         results = await asyncio.gather(*tasks)
         for track_list in results:
@@ -152,9 +197,8 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
                 if track_key not in seen_tracks:
                     candidate_tracks_info.append(track_info)
                     seen_tracks.add(track_key)
-        logging.info(f"Plan A (Last.fm Similar) found {len(candidate_tracks_info)} candidates.")
-
-    # --- 4. แผน B: หาเพลงฮิตจากศิลปินโปรดของผู้ใช้ ---
+    
+    # --- แผน B: หาเพลงฮิตจากศิลปินโปรดของผู้ใช้ ---
     if not candidate_tracks_info and seed_tracks_list:
         logging.warning("Plan A failed. Executing Fallback #1: Last.fm Artist's Top Tracks.")
         artist_names = list(set(track['artists'][0]['name'] for track in seed_tracks_list))
@@ -167,7 +211,7 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
                     candidate_tracks_info.append(track_info)
                     seen_tracks.add(track_key)
 
-    # --- 5. แผน C: ใช้เพลงฮิตติดชาร์ตประเทศ ---
+    # --- แผน C: ใช้เพลงฮิตติดชาร์ตประเทศ ---
     if not candidate_tracks_info:
         logging.warning("Fallback #1 failed. Executing Ultimate Fallback: Country Chart.")
         user_physical_country = (await get_user_profile(sp_client)).get("country", "US")
@@ -177,45 +221,52 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
         logging.error("All recommendation plans have failed.")
         return []
 
-    # --- 6. นำผลลัพธ์ไปค้นหาและให้คะแนน (ฉบับแก้ไข) ---
-    logging.info(f"Got {len(candidate_tracks_info)} candidates. Performing Just-in-Time analysis.")
+    # 4. วิเคราะห์, ให้คะแนน, และ "จัดกลุ่มตามโทน"
+    logging.info(f"Got {len(candidate_tracks_info)} candidates. Performing Vibe-aware analysis.")
     
-    ranked_candidates = []
-    # สร้าง list ของ URI เพลงที่เรามีอยู่แล้ว เพื่อไม่ให้แนะนำเพลงซ้ำ
+    primary_vibe_songs = []
+    secondary_vibe_songs = []
+    
     existing_uris = {t['uri'] for t in seed_tracks_list}
+    recommended_uris = set()
 
     for track_info in candidate_tracks_info:
         query = f"track:{track_info['title']} artist:{track_info['artist']}"
         spotify_results = await search_spotify_songs(sp_client, query, limit=1)
         
-        # ตรวจสอบว่าเจอเพลงใน Spotify และไม่ใช่เพลงที่ผู้ใช้มีอยู่แล้ว
-        if not spotify_results or spotify_results[0]['uri'] in existing_uris:
-            continue
-
+        if not spotify_results: continue
         spotify_track = spotify_results[0]
-        
-        # ส่วนของการวิเคราะห์และให้คะแนน (ส่วนนี้ถูกต้องอยู่แล้ว)
-        cached_analysis = await get_song_analysis_from_db(spotify_track['uri'])
+        track_uri = spotify_track['uri']
+        if track_uri in existing_uris or track_uri in recommended_uris: continue
+
+        cached_analysis = await get_song_analysis_from_db(track_uri)
         song_moods = []
         if cached_analysis and 'lyrical_analysis' in cached_analysis and 'predicted_moods' in cached_analysis['lyrical_analysis']:
             song_moods = cached_analysis['lyrical_analysis']['predicted_moods']
         else:
-            # analyze_and_cache_song เป็นฟังก์ชันสมมติที่ต้องมีในโค้ดของคุณ
             new_analysis = await analyze_and_cache_song(spotify_track)
             song_moods = new_analysis.get('predicted_moods', [])
         
         score = calculate_mood_score(song_moods, user_mood_profile)
-        print(f"  -> Scoring '{spotify_track['name']}': Moods={song_moods}, Final Score={score:.2f}")
-
         spotify_track['ai_analysis'] = {"mood_score": score, "predicted_moods": song_moods}
-        ranked_candidates.append(spotify_track)
+        
+        if dominant_mood and dominant_mood in song_moods:
+            primary_vibe_songs.append(spotify_track)
+        else:
+            secondary_vibe_songs.append(spotify_track)
+        
+        recommended_uris.add(track_uri)
 
-    ranked_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
+    # 5. จัดลำดับและรวมเพลย์ลิสต์ (ย้ายออกมานอก loop)
+    primary_vibe_songs.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
+    secondary_vibe_songs.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
+
+    final_playlist = primary_vibe_songs + secondary_vibe_songs
     
-    logging.info(f"Found and ranked {len(ranked_candidates)} final tracks.")
-    return ranked_candidates[:15]
+    logging.info(f"Found {len(final_playlist)} final tracks. Primary vibe songs: {len(primary_vibe_songs)}")
+    return final_playlist[:15]
 
-# --- 7. เพิ่มฟังก์ชัน helper นี้เข้าไปใน recommender.py เพื่อดึงเพลงเมล็ดพันธุ์ ---
+# --- พิ่มฟังก์ชัน helper นี้เข้าไปใน recommender.py เพื่อดึงเพลงเมล็ดพันธุ์ ---
 # (ฟังก์ชันนี้เป็นการนำ logic จาก build_user_mood_profile มาใช้ซ้ำ)
 async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
     """

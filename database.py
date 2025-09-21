@@ -72,6 +72,25 @@ async def init_db():
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # 7. (ใหม่) ตารางสำหรับเก็บประวัติเพลงที่เคยแนะนำ
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recommendation_history (
+                    user_id TEXT NOT NULL,
+                    track_uri TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, track_uri)
+                )
+            """)
+             # 8. (ใหม่) ตารางสำหรับเก็บ Feedback ของผู้ใช้
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_feedback (
+                    user_id TEXT NOT NULL,
+                    track_uri TEXT NOT NULL,
+                    feedback TEXT NOT NULL, -- 'like' or 'dislike'
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, track_uri)
+                )
+            """)               
             conn.commit()
         finally:
             conn.close()
@@ -194,6 +213,70 @@ async def get_user_mood_profile(user_id: str) -> dict | None:
             cursor = conn.cursor()
             row = cursor.execute("SELECT profile_json FROM user_mood_profiles WHERE user_id = ?", (user_id,)).fetchone()
             return json.loads(row['profile_json']) if row else None
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)
+
+async def save_recommendation_history(user_id: str, track_uris: list[str]):
+    """บันทึกประวัติเพลงที่แนะนำให้ผู้ใช้"""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            # เตรียมข้อมูลเป็น list of tuples
+            data_to_insert = [(user_id, uri) for uri in track_uris]
+            # ใช้ INSERT OR IGNORE เพื่อป้องกัน error หากพยายามบันทึกเพลงซ้ำ
+            cursor.executemany(
+                "INSERT OR IGNORE INTO recommendation_history (user_id, track_uri) VALUES (?, ?)",
+                data_to_insert
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    await asyncio.to_thread(db_operation)
+
+async def get_recommendation_history(user_id: str) -> set[str]:
+    """ดึงประวัติเพลงที่เคยแนะนำทั้งหมดของผู้ใช้ในรูปแบบ set เพื่อความรวดเร็ว"""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            rows = cursor.execute("SELECT track_uri FROM recommendation_history WHERE user_id = ?", (user_id,)).fetchall()
+            # คืนค่าเป็น set ของ track_uri
+            return {row['track_uri'] for row in rows}
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)
+
+async def save_user_feedback(user_id: str, track_uri: str, feedback: str):
+    """บันทึก Feedback (like/dislike) ของผู้ใช้ลงฐานข้อมูล"""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            # ใช้ INSERT OR REPLACE เพื่อให้ Feedback ใหม่ทับของเก่าเสมอ
+            # เช่น หากเคย dislike แล้วมากด like, สถานะจะเปลี่ยนเป็น like
+            cursor.execute(
+                "INSERT OR REPLACE INTO user_feedback (user_id, track_uri, feedback) VALUES (?, ?, ?)",
+                (user_id, track_uri, feedback)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    await asyncio.to_thread(db_operation)
+
+async def get_user_feedback(user_id: str) -> dict:
+    """ดึงข้อมูล Feedback ทั้งหมดของผู้ใช้ แยกเป็น 'likes' และ 'dislikes'"""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            rows = cursor.execute("SELECT track_uri, feedback FROM user_feedback WHERE user_id = ?", (user_id,)).fetchall()
+            feedback_data = {
+                'likes': {row['track_uri'] for row in rows if row['feedback'] == 'like'},
+                'dislikes': {row['track_uri'] for row in rows if row['feedback'] == 'dislike'}
+            }
+            return feedback_data
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)

@@ -156,12 +156,17 @@
             const songName = song.name || 'เพลง';
             const spotifyUrl = song.external_urls?.spotify || '#';
             
-            return `<div class="song-item-card p-3 rounded-lg border flex items-center space-x-4 mb-2">
+            // ✨ --- เพิ่มปุ่ม Feedback เข้าไปใน HTML --- ✨
+            return `<div class="song-item-card p-3 rounded-lg border flex items-center space-x-3 mb-2">
                 <img src="${imageUrl}" class="w-16 h-16 rounded-lg object-cover">
                 <div class="flex-1 text-left">
                     <div class="font-semibold">${songName}</div>
                     <div class="text-sm opacity-80">${artistName}</div>
                 </div>
+                
+                <button class="feedback-btn text-xl text-gray-400 hover:text-green-500 transition" data-uri="${song.uri}" data-feedback="like">👍</button>
+                <button class="feedback-btn text-xl text-gray-400 hover:text-red-500 transition" data-uri="${song.uri}" data-feedback="dislike">👎</button>
+
                 <button class="show-details-btn text-sm py-2 px-4 rounded-full bg-gray-600 hover:bg-gray-700 transition" 
                         data-uri="${song.uri}" data-name="${songName}" data-artist="${artistName}" data-image="${imageUrl}">
                     <i class="fas fa-info-circle"></i>
@@ -202,6 +207,8 @@
             updateUIForLoginState();
             renderMessage('<p class="text-sm">ออกจากระบบ Spotify แล้ว</p>');
         }
+        
+        
 
         async function getUserProfile(accessToken) {
             try {
@@ -316,8 +323,48 @@
                 document.getElementById('modal-analysis-content').innerHTML = '<p>ไม่สามารถโหลดข้อมูลการวิเคราะห์ได้</p>';
             }
         }
-        
-        // --- 6. ฟังก์ชัน khởi tạo ---
+
+        // ✨ --- ฟังก์ชันจัดการ Feedback --- ✨
+        async function handleFeedback(e) {
+                const button = e.target.closest('.feedback-btn');
+                if (!button) return;
+
+                const trackUri = button.dataset.uri;
+                const feedback = button.dataset.feedback;
+                const accessToken = localStorage.getItem('spotify_access_token');
+
+                if (!accessToken) {
+                    renderMessage('<p class="text-sm">กรุณาเข้าสู่ระบบ Spotify ก่อนให้ Feedback ครับ</p>');
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/feedback', {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${accessToken}` 
+                        },
+                        body: JSON.stringify({ track_uri: trackUri, feedback: feedback })
+                    });
+
+                    if (!response.ok) throw new Error('Failed to save feedback');
+
+                    // ทำให้ปุ่มมี Animation หรือเปลี่ยนสีเพื่อบอกว่ากดสำเร็จ
+                    button.style.transform = 'scale(1.5)';
+                    setTimeout(() => { button.style.transform = 'scale(1)'; }, 200);
+
+                    // เอาปุ่ม dislike/like คู่กันออกไปเลยหลังกดแล้ว
+                    const parentCard = button.closest('.song-item-card');
+                    parentCard.querySelectorAll('.feedback-btn').forEach(btn => btn.style.display = 'none');
+
+
+                } catch (error) {
+                    console.error('Feedback Error:', error);
+                }
+            }
+
+        // --- 6. ฟังก์ชันเริ่มต้นแอป (Initialize App) ---
         async function initializeApp() {
             applyTheme(currentTheme);
             const urlParams = new URLSearchParams(window.location.search);
@@ -345,6 +392,7 @@
             sidebarOverlay.addEventListener('click', closeSidebar);
             spotifyLoginButton.addEventListener('click', handleSpotifyLogin);
             spotifyLogoutButton.addEventListener('click', handleSpotifyLogout);
+            chatHistory.addEventListener('click', handleFeedback);
             themeToggleButton.addEventListener('click', toggleTheme);
             chatHistory.addEventListener('click', handleShowDetails);
             createPlaylistBtn.addEventListener('click', handleCreatePlaylist);
