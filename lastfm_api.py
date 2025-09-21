@@ -1,5 +1,5 @@
 # lastfm_api.py (Upgraded with Country Code Mapping and Global Chart)
-import httpx
+import httpx # type: ignore
 from config import Config
 import logging
 
@@ -106,4 +106,34 @@ async def get_global_top_tracks(limit: int = 20) -> list[dict]:
             return []
     except Exception as e:
         logging.error(f"Error in get_global_top_tracks: {e}")
+        return []
+    
+async def get_artist_top_tracks(artist: str, limit: int = 5) -> list[dict]:
+    """
+    ดึงเพลง Top Tracks ของศิลปินที่ระบุจาก Last.fm
+    """
+    if not Config.LASTFM_API_KEY:
+        logging.warning("Last.fm API Key is not configured. Skipping artist top track search.")
+        return []
+
+    params = {
+        "method": "artist.gettoptracks",
+        "artist": artist,
+        "api_key": Config.LASTFM_API_KEY,
+        "format": "json",
+        "limit": limit
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(LASTFM_BASE_URL, params=params, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
+
+            if "toptracks" in data and "track" in data["toptracks"]:
+                tracks = data["toptracks"]["track"]
+                return [{"artist": t["artist"]["name"], "title": t["name"]} for t in tracks]
+            return []
+    except Exception as e:
+        logging.error(f"Error in get_artist_top_tracks for {artist}: {e}")
         return []

@@ -78,7 +78,7 @@ async def create_spotify_playlist(sp_client: spotipy.Spotify, playlist_name: str
     return playlist
 
 async def get_user_top_tracks(sp_client: spotipy.Spotify, limit: int = 20) -> list[dict]:
-    results = await asyncio.to_thread(sp_client.current_user_top_tracks, limit=int(limit), time_range='medium_term')
+    results = await asyncio.to_thread(sp_client.current_user_top_tracks, limit=int(limit), time_range='long_term')
     return results['items']
 
 async def get_user_saved_tracks_uris(sp_client: spotipy.Spotify) -> set[str]:
@@ -238,3 +238,41 @@ async def get_personalized_recommendations(sp_client: spotipy.Spotify, taste_pro
     except Exception as e:
         print(f"  -> Error during personalized recommendation: {e}")
         return []
+    
+async def get_user_recently_played_tracks(sp_client: spotipy.Spotify, limit: int = 15) -> list[dict]:
+    """ดึงข้อมูลเพลงที่ผู้ใช้ฟังล่าสุด (Recently Played)"""
+    results = await asyncio.to_thread(sp_client.current_user_recently_played, limit=limit)
+    # API จะ trả về list ที่มี track object ซ้อนอยู่ข้างใน เราจึงต้องดึงออกมา
+    return [item['track'] for item in results['items'] if item and item.get('track')]
+
+async def get_user_saved_tracks(sp_client: spotipy.Spotify, limit: int = 10) -> list[dict]:
+    """
+    (เวอร์ชันใหม่) ดึงข้อมูลเพลงที่ผู้ใช้กดไลค์ (Saved Tracks) โดยการสุ่ม
+    """
+    try:
+        # 1. ดึงข้อมูลหน้าแรกเพื่อหาจำนวนเพลงทั้งหมดที่กดไลค์ไว้
+        first_page = await asyncio.to_thread(sp_client.current_user_saved_tracks, limit=1)
+        total_saved_tracks = first_page['total']
+
+        if total_saved_tracks == 0:
+            return []
+
+        # 2. สุ่มตำแหน่งเริ่มต้น (offset) ที่จะดึงเพลง
+        # เพื่อให้แน่ใจว่าเราจะไม่สุ่มไปไกลเกินจำนวนเพลงที่มี
+        max_offset = max(0, total_saved_tracks - limit)
+        random_offset = random.randint(0, max_offset)
+
+        # 3. ดึงเพลงจากตำแหน่งที่สุ่มได้
+        results = await asyncio.to_thread(
+            sp_client.current_user_saved_tracks, 
+            limit=limit, 
+            offset=random_offset
+        )
+        
+        return [item['track'] for item in results['items'] if item and item.get('track')]
+
+    except Exception as e:
+        print(f"  -> Could not fetch random saved tracks: {e}")
+        # หากเกิดข้อผิดพลาด ให้กลับไปใช้วิธีเดิม (ดึงเพลงล่าสุด) เพื่อให้โปรแกรมทำงานต่อได้
+        results = await asyncio.to_thread(sp_client.current_user_saved_tracks, limit=limit)
+        return [item['track'] for item in results['items'] if item and item.get('track')]
