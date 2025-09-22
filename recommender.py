@@ -70,32 +70,8 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> d
     # --- จบส่วน Log ---
 
     if not seed_tracks_list:
+        logging.warning("User has no tracks from any source to build mood profile.")
         return {}
-
-    all_moods = []
-    analysis_tasks = []
-    for track in seed_tracks_list[:12]:
-        async def analyze_single_track(t):
-            lyrics = await get_lyrics(t['artists'][0]['name'], t['name'])
-            if lyrics:
-                predicted = predict_moods(lyrics)
-                return predicted
-            return []
-        analysis_tasks.append(analyze_single_track(track))
-    
-    mood_results = await asyncio.gather(*analysis_tasks)
-    for moods in mood_results:
-        all_moods.extend(moods)
-
-    if not all_moods:
-        return {}
-
-    mood_counts = Counter(all_moods)
-    total_moods = len(all_moods)
-    mood_profile = {mood: count / total_moods for mood, count in mood_counts.items()}
-    
-    logging.info(f"User mood profile created: {mood_profile}")
-    return mood_profile
 
     # 3. วิเคราะห์อารมณ์จากเพลง (ส่วนนี้เหมือนเดิม)
     all_moods = []

@@ -18,6 +18,11 @@ from recommender import get_intelligent_recommendations, update_user_profile_bac
 from gemini_ai import get_song_analysis_details
 from pydantic import BaseModel
 from typing import List
+from database import save_user_feedback
+
+class FeedbackRequest(BaseModel):
+    track_uri: str
+    feedback: str # 'like' or 'dislike'
 
 
 # --- Logging Configuration ---
@@ -126,6 +131,27 @@ async def song_details_endpoint(song_uri: str, authorization: Annotated[str | No
     # ฟังก์ชันนี้ถูกย้ายไป gemini_ai.py แล้ว
     details = await get_song_analysis_details(token, song_uri)
     return details
+
+# --- Endpoint ใหม่สำหรับบันทึก Feedback ---
+
+@app.post("/feedback")
+async def save_feedback_endpoint(req: FeedbackRequest, authorization: Annotated[str | None, Header()] = None):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    
+    # เราต้องดึง user_id จาก token เพื่อระบุว่าเป็น feedback ของใคร
+    token = authorization.split("Bearer ")[1]
+    sp_client = create_spotify_client({"access_token": token})
+    user_profile = await get_user_profile(sp_client)
+    user_id = user_profile.get('id')
+
+    if not user_id:
+        raise HTTPException(status_code=404, detail="Could not find user.")
+
+    await save_user_feedback(user_id, req.track_uri, req.feedback)
+    
+    logging.info(f"Saved feedback for user {user_id}: {req.feedback} track {req.track_uri}")
+    return {"status": "success", "message": f"Feedback '{req.feedback}' saved for track {req.track_uri}."}
 
 # --- Main Chat Endpoint (เวอร์ชันสมบูรณ์) ---
 @app.post("/chat", response_model=ChatResponse)
