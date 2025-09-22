@@ -91,18 +91,8 @@ async def init_db():
                     PRIMARY KEY (user_id, track_uri)
                 )
             """)
-             # 9. (ใหม่) ตารางสำหรับเก็บ Feedback ของผู้ใช้
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_feedback (
-                    user_id TEXT NOT NULL,
-                    track_uri TEXT NOT NULL,
-                    feedback TEXT NOT NULL, -- 'like' or 'dislike'
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (user_id, track_uri)
-                )
-            """)
 
-            # --- 10. (ใหม่) ตารางสำหรับเก็บเพลย์ลิสต์ที่ Pin ไว้ ---
+            # --- 9. (ใหม่) ตารางสำหรับเก็บเพลย์ลิสต์ที่ Pin ไว้ ---
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pinned_playlists (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
