@@ -41,8 +41,12 @@
                     <button id="spotify-login-button" class="mt-4 w-full py-2 px-4 rounded-full font-medium transition-colors bg-green-500 text-white hover:bg-green-600"><i class="fab fa-spotify mr-2"></i> เข้าสู่ระบบด้วย Spotify</button>
                     <button id="spotify-logout-button" class="mt-2 w-full py-2 px-4 rounded-full font-medium transition-colors bg-red-500 text-white hover:bg-red-600 hidden"><i class="fas fa-sign-out-alt mr-2"></i> ออกจากระบบ Spotify</button>
                 </div>
-                <div class="flex-grow"></div>
-                <div class="mt-4 pt-4 border-t border-[var(--border-color)]">
+                <div class="flex-grow p-2 overflow-y-auto mt-4 border-t border-[var(--border-color)]">
+                    <h3 class="text-sm font-semibold text-gray-400 mb-2 px-2 pt-2">ประวัติเพลย์ลิสต์ที่ Pin ไว้</h3>
+                    <div id="playlist-history-container" class="space-y-1">
+                        </div>
+                </div>
+                <div class="mt-auto pt-4 border-t border-[var(--border-color)]">
                     <button id="theme-toggle-button" class="w-full flex items-center justify-between py-2 px-4 rounded-lg text-gray-300 hover:bg-opacity-50 hover:bg-gray-500 transition-colors">
                         <span id="theme-icon-text"><i class="fas fa-sun mr-2"></i> โหมดกลางวัน</span>
                     </button>
@@ -106,7 +110,7 @@
     </div>
 
     <script type="module">
-        // --- 1. ประกาศตัวแปร DOM ทั้งหมด ---
+        // --- 1. ประกาศตัวแปร DOM ทั้งหมด (แก้ไขให้ไม่มีการประกาศซ้ำ) ---
         const sidebar = document.getElementById('sidebar');
         const sidebarOverlay = document.getElementById('sidebar-overlay');
         const sidebarToggle = document.getElementById('sidebar-toggle-button');
@@ -126,11 +130,13 @@
         const songModalOverlay = document.getElementById('song-modal-overlay');
         const songModalContent = document.getElementById('song-modal-content');
         const modalCloseBtn = document.getElementById('modal-close-btn');
+        const playlistHistoryContainer = document.getElementById('playlist-history-container');
 
         // --- 2. ประกาศตัวแปร State ของแอป ---
         let isFetching = false;
         let currentTheme = localStorage.getItem('theme') || 'dark';
         let currentRecommendedSongs = [];
+        let pinnedPlaylists = []; // Array สำหรับเก็บประวัติที่ Pin ไว้จาก DB
 
         // --- 3. กลุ่มฟังก์ชัน Helper ทั่วไป ---
         function showLoading(show) { loadingOverlay.classList.toggle('hidden', !show); }
@@ -156,17 +162,14 @@
             const songName = song.name || 'เพลง';
             const spotifyUrl = song.external_urls?.spotify || '#';
             
-            // ✨ --- เพิ่มปุ่ม Feedback เข้าไปใน HTML --- ✨
             return `<div class="song-item-card p-3 rounded-lg border flex items-center space-x-3 mb-2">
                 <img src="${imageUrl}" class="w-16 h-16 rounded-lg object-cover">
                 <div class="flex-1 text-left">
                     <div class="font-semibold">${songName}</div>
                     <div class="text-sm opacity-80">${artistName}</div>
                 </div>
-                
                 <button class="feedback-btn text-xl text-gray-400 hover:text-green-500 transition" data-uri="${song.uri}" data-feedback="like">👍</button>
                 <button class="feedback-btn text-xl text-gray-400 hover:text-red-500 transition" data-uri="${song.uri}" data-feedback="dislike">👎</button>
-
                 <button class="show-details-btn text-sm py-2 px-4 rounded-full bg-gray-600 hover:bg-gray-700 transition" 
                         data-uri="${song.uri}" data-name="${songName}" data-artist="${artistName}" data-image="${imageUrl}">
                     <i class="fas fa-info-circle"></i>
@@ -176,17 +179,48 @@
                 </a>
             </div>`;
         }
-        function renderMessage(htmlContent, isUser = false) {
+
+        function renderMessage(htmlContent, isUser = false, songs = null, recommendationText = '') {
             const bubble = document.createElement('div');
-            bubble.classList.add('flex', 'items-start');
-            if (isUser) { bubble.classList.add('justify-end'); }
-            const messageBody = isUser ?
-                `<div class="bg-green-500 p-4 rounded-xl rounded-tr-none max-w-xl shadow"><p class="text-sm text-white">${htmlContent}</p></div>` :
-                `<div class="w-10 h-10 rounded-full flex-shrink-0 mr-3"><i class="fas fa-robot text-4xl text-green-500"></i></div><div class="flex-1"><div class="bg-[var(--chat-bubble-ai)] p-4 rounded-xl rounded-tl-none max-w-xl shadow">${htmlContent}</div></div>`;
+            bubble.classList.add('flex', 'items-start', 'mb-4');
+            if (isUser) {
+                bubble.classList.add('justify-end');
+            }
+
+            let messageBody = '';
+            if (isUser) {
+                messageBody = `<div class="bg-green-500 p-4 rounded-xl rounded-tr-none max-w-xl shadow"><p class="text-sm text-white">${htmlContent}</p></div>`;
+            } else {
+                let pinButtonHTML = '';
+                if (songs && songs.length > 0) {
+                    const songsData = encodeURIComponent(JSON.stringify(songs));
+                    const recTextData = encodeURIComponent(recommendationText);
+                    
+                    pinButtonHTML = `
+                        <div class="mt-3 pt-3 border-t border-gray-500 border-opacity-50">
+                            <button class="pin-playlist-btn text-xs py-1 px-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition"
+                                    data-songs='${songsData}'
+                                    data-rec-text='${recTextData}'>
+                                <i class="fas fa-thumbtack mr-1"></i> Pin Playlist นี้ไว้
+                            </button>
+                        </div>`;
+                }
+
+                messageBody = `
+                    <div class="w-10 h-10 rounded-full flex-shrink-0 mr-3"><i class="fas fa-robot text-4xl text-green-500"></i></div>
+                    <div class="flex-1">
+                        <div class="bg-[var(--chat-bubble-ai)] p-4 rounded-xl rounded-tl-none max-w-xl shadow">
+                            ${htmlContent}
+                            ${pinButtonHTML} 
+                        </div>
+                    </div>`;
+            }
+
             bubble.innerHTML = messageBody;
             chatHistory.appendChild(bubble);
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
+
         function updateUIForLoginState() {
             const displayName = localStorage.getItem('spotify_display_name');
             const avatar = localStorage.getItem('spotify_avatar');
@@ -196,20 +230,86 @@
             spotifyLoginButton.classList.toggle('hidden', isLoggedIn);
             spotifyLogoutButton.classList.toggle('hidden', !isLoggedIn);
         }
-
+        
         // --- 5. กลุ่มฟังก์ชันหลัก (Core Logic) ---
-        function handleSpotifyLogin() { window.location.href = '/spotify_login'; }
-        function handleSpotifyLogout() {
-            // ใช้ localStorage.clear() เพื่อล้างข้อมูลทั้งหมดของผู้ใช้เก่า
-            localStorage.clear();
 
-            // อัปเดต UI ให้กลับไปเป็นสถานะเริ่มต้น
+        // (ใหม่) ดึงและแสดงผลเพลย์ลิสต์ที่ Pin ไว้จาก Backend
+        async function fetchAndRenderPinnedPlaylists() {
+            const accessToken = localStorage.getItem('spotify_access_token');
+            if (!accessToken) return;
+
+            try {
+                const response = await fetch('/pinned_playlists', { headers: { 'Authorization': `Bearer ${accessToken}` } });
+                if (!response.ok) throw new Error('Could not fetch pinned playlists');
+                
+                pinnedPlaylists = await response.json();
+                
+                playlistHistoryContainer.innerHTML = ''; // ล้างของเก่า
+                pinnedPlaylists.forEach((item, index) => {
+                    const date = new Date(item.timestamp).toLocaleDateString('th-TH');
+                    const historyElement = document.createElement('button');
+                    historyElement.className = 'w-full text-left text-sm p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-300';
+                    historyElement.innerHTML = `<div class="font-medium">${item.name}</div><div class="text-xs text-gray-400">Pinned on: ${date}</div>`;
+                    historyElement.dataset.index = index;
+                    playlistHistoryContainer.appendChild(historyElement);
+                });
+            } catch (error) {
+                console.error("Fetch Pinned Error:", error);
+            }
+        }
+
+        // (ใหม่) จัดการเมื่อผู้ใช้กดปุ่ม Pin Playlist
+        async function handlePinClick(event) {
+            const pinButton = event.target.closest('.pin-playlist-btn');
+            if (!pinButton) return;
+
+            const accessToken = localStorage.getItem('spotify_access_token');
+            if (!accessToken) {
+                alert('กรุณาเข้าสู่ระบบ Spotify ก่อน Pin เพลย์ลิสต์ครับ');
+                return;
+            }
+
+            try {
+                const songs = JSON.parse(decodeURIComponent(pinButton.dataset.songs));
+                const recText = decodeURIComponent(pinButton.dataset.recText);
+                const playlistName = `AI Playlist - ${new Date().toLocaleTimeString('th-TH')}`;
+
+                const response = await fetch('/pin_playlist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                    body: JSON.stringify({ playlist_name: playlistName, songs: songs, recommendation_text: recText })
+                });
+
+                if (!response.ok) throw new Error('Failed to pin playlist');
+
+                await fetchAndRenderPinnedPlaylists();
+                pinButton.textContent = 'Pinned!';
+                pinButton.disabled = true;
+            } catch (error) {
+                console.error("Pinning Error:", error);
+                alert('เกิดข้อผิดพลาดในการ Pin เพลย์ลิสต์');
+            }
+        }
+
+        // (อัปเกรด) แสดงเพลย์ลิสต์ที่เลือกจากประวัติ
+        function displayPlaylistFromHistory(historyIndex) {
+            const historyItem = pinnedPlaylists[historyIndex];
+            if (!historyItem) return;
+            const content = `<p class="text-sm">${historyItem.recommendationText}</p><div class="mt-4">${historyItem.songs.map(getSongCard).join('')}</div>`;
+            renderMessage(content, false, historyItem.songs, historyItem.recommendationText);
+            currentRecommendedSongs = historyItem.songs;
+            playlistControls.classList.remove('hidden');
+        }
+
+        function handleSpotifyLogin() { window.location.href = '/spotify_login'; }
+        
+        function handleSpotifyLogout() {
+            localStorage.clear();
             updateUIForLoginState();
+            playlistHistoryContainer.innerHTML = ''; // เคลียร์ประวัติที่แสดงผล
             renderMessage('<p class="text-sm">ออกจากระบบ Spotify แล้ว</p>');
         }
         
-        
-
         async function getUserProfile(accessToken) {
             try {
                 const response = await fetch('/me', { headers: { 'Authorization': `Bearer ${accessToken}` } });
@@ -226,6 +326,7 @@
                 return false;
             }
         }
+
         async function sendMessageToBackend() {
             if (isFetching || userInput.value.trim() === '') return;
             const userMessage = userInput.value.trim();
@@ -253,21 +354,16 @@
                     throw new Error(errorData.detail || 'Server error');
                 }
                 const data = await response.json();
-
-                // --- LOGIC ที่แก้ไขแล้ว ---
-                if (data.songs_found && data.songs_found.length > 0) {
-                    currentRecommendedSongs = data.songs_found;
+                
+                currentRecommendedSongs = (data.songs_found && data.songs_found.length > 0) ? data.songs_found : [];
+                if (currentRecommendedSongs.length > 0) {
                     playlistControls.classList.remove('hidden');
-                } else {
-                    currentRecommendedSongs = [];
                 }
-                // --- จบ LOGIC ที่แก้ไข ---
 
-                let aiResponseHTML = `<p class="text-sm whitespace-pre-wrap">${data.response || ''}</p>`;
-                if (data.songs_found) {
-                    aiResponseHTML += `<div class="mt-4">${data.songs_found.map(getSongCard).join('')}</div>`;
-                }
-                renderMessage(aiResponseHTML);
+                const content = `<p class="text-sm whitespace-pre-wrap">${data.response || ''}</p>
+                                 ${data.songs_found ? `<div class="mt-4">${data.songs_found.map(getSongCard).join('')}</div>` : ''}`;
+                
+                renderMessage(content, false, data.songs_found, data.response);
 
             } catch (error) {
                 renderMessage(`<p class="text-sm">ขออภัยค่ะ เกิดข้อผิดพลาด: ${error.message}</p>`);
@@ -276,6 +372,7 @@
                 showLoading(false);
             }
         }
+
         async function handleCreatePlaylist() {
             if (currentRecommendedSongs.length === 0) return;
             const playlistName = `AI Playlist: ${new Date().toLocaleString('th-TH')}`;
@@ -302,6 +399,7 @@
                 showLoading(false);
             }
         }
+        
         async function handleShowDetails(e) {
             const button = e.target.closest('.show-details-btn');
             if (!button) return;
@@ -324,41 +422,27 @@
             }
         }
 
-        // ✨ --- ฟังก์ชันจัดการ Feedback --- ✨
         async function handleFeedback(e) {
                 const button = e.target.closest('.feedback-btn');
                 if (!button) return;
-
                 const trackUri = button.dataset.uri;
                 const feedback = button.dataset.feedback;
                 const accessToken = localStorage.getItem('spotify_access_token');
-
                 if (!accessToken) {
                     renderMessage('<p class="text-sm">กรุณาเข้าสู่ระบบ Spotify ก่อนให้ Feedback ครับ</p>');
                     return;
                 }
-
                 try {
                     const response = await fetch('/feedback', {
                         method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${accessToken}` 
-                        },
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
                         body: JSON.stringify({ track_uri: trackUri, feedback: feedback })
                     });
-
                     if (!response.ok) throw new Error('Failed to save feedback');
-
-                    // ทำให้ปุ่มมี Animation หรือเปลี่ยนสีเพื่อบอกว่ากดสำเร็จ
                     button.style.transform = 'scale(1.5)';
                     setTimeout(() => { button.style.transform = 'scale(1)'; }, 200);
-
-                    // เอาปุ่ม dislike/like คู่กันออกไปเลยหลังกดแล้ว
                     const parentCard = button.closest('.song-item-card');
                     parentCard.querySelectorAll('.feedback-btn').forEach(btn => btn.style.display = 'none');
-
-
                 } catch (error) {
                     console.error('Feedback Error:', error);
                 }
@@ -369,18 +453,23 @@
             applyTheme(currentTheme);
             const urlParams = new URLSearchParams(window.location.search);
             const accessToken = urlParams.get('access_token');
+
             if (accessToken) {
-                localStorage.setItem('spotify_access_token', accessToken);
                 const expiresIn = urlParams.get('expires_in');
                 const refreshToken = urlParams.get('refresh_token');
                 const expiresAt = Date.now() + (parseInt(expiresIn, 10) * 1000);
+                localStorage.setItem('spotify_access_token', accessToken);
                 localStorage.setItem('spotify_expires_at', expiresAt);
                 if (refreshToken) { localStorage.setItem('spotify_refresh_token', refreshToken); }
                 window.history.replaceState({}, document.title, "/");
+                
                 const profileFetched = await getUserProfile(accessToken);
                 if (profileFetched) {
                     renderMessage('<p class="text-sm">เข้าสู่ระบบ Spotify สำเร็จแล้ว!</p>');
+                    await fetchAndRenderPinnedPlaylists(); 
                 }
+            } else if (localStorage.getItem('spotify_access_token')) {
+                await fetchAndRenderPinnedPlaylists();
             }
             updateUIForLoginState();
             
@@ -392,13 +481,23 @@
             sidebarOverlay.addEventListener('click', closeSidebar);
             spotifyLoginButton.addEventListener('click', handleSpotifyLogin);
             spotifyLogoutButton.addEventListener('click', handleSpotifyLogout);
-            chatHistory.addEventListener('click', handleFeedback);
             themeToggleButton.addEventListener('click', toggleTheme);
-            chatHistory.addEventListener('click', handleShowDetails);
             createPlaylistBtn.addEventListener('click', handleCreatePlaylist);
             modalCloseBtn.addEventListener('click', closeModal);
-            songModalOverlay.addEventListener('click', (e) => {
-                if (e.target === songModalOverlay) closeModal();
+            songModalOverlay.addEventListener('click', (e) => { if (e.target === songModalOverlay) closeModal(); });
+            
+            // --- Event Bubbling: ใช้ chatHistory เป็นตัวดักจับ Event หลัก ---
+            chatHistory.addEventListener('click', (e) => {
+                if (e.target.closest('.feedback-btn')) handleFeedback(e);
+                if (e.target.closest('.show-details-btn')) handleShowDetails(e);
+                if (e.target.closest('.pin-playlist-btn')) handlePinClick(e);
+            });
+
+            playlistHistoryContainer.addEventListener('click', (e) => {
+                const button = e.target.closest('button');
+                if (button && button.dataset.index) {
+                    displayPlaylistFromHistory(parseInt(button.dataset.index, 10));
+                }
             });
         }
         

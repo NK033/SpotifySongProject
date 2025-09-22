@@ -2,6 +2,7 @@
 import asyncio
 import spotipy
 import logging
+from datetime import datetime, timedelta, timezone
 from collections import Counter
 import random
 # Import local modules
@@ -12,7 +13,7 @@ from custom_model import predict_moods
 from database import (
     get_song_analysis_from_db, save_song_analysis_to_db, get_user_mood_profile, 
     save_user_mood_profile, save_recommendation_history, get_recommendation_history,
-    get_user_feedback
+    get_user_feedback,get_user_mood_profile_with_timestamp
 )
 
 async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> dict:
@@ -45,7 +46,7 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> d
             print(f"  {i+1}. '{track['name']}' by {track['artists'][0]['name']}")
 
     print_track_list("Your Top Tracks (Long Term)", top_tracks)
-    print_track_list("Your Liked (Saved) Tracks", liked_tracks)
+    print_track_list("Your Liked (Saved) Tracks", saved_tracks)
     print_track_list("Your Recently Played Tracks", recent_tracks)
     
     # 2. รวมเพลง โดยนำเพลงที่เคย 'Like' เข้ามาด้วย
@@ -136,33 +137,29 @@ async def analyze_and_cache_song(spotify_track: dict) -> dict:
 
 async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: str) -> list[dict]:
     """
-    (เวอร์ชันคุมโทนด้วย Mood) แนะนำเพลงโดยยึด "อารมณ์หลัก" ของผู้ใช้เป็นศูนย์กลาง
+    (เวอร์ชันอัปเกรด) แนะนำเพลงโดยยึด "อารมณ์หลัก" และ "Feedback" ของผู้ใช้เป็นศูนย์กลาง
     """
-    # 1. สร้างโปรไฟล์อารมณ์ของผู้ใช้
+    # 1. สร้างโปรไฟล์อารมณ์ของผู้ใช้ (เหมือนเดิม)
     user_mood_profile = await get_user_mood_profile(user_id)
     if not user_mood_profile:
-        user_mood_profile = await build_user_mood_profile(sp_client)
+        user_mood_profile = await build_user_mood_profile(sp_client, user_id)
         if not user_mood_profile:
             logging.warning("Could not build mood profile. Cannot provide personalized recommendations.")
-            # ในสถานการณ์จริง ส่วนนี้ควรไปดึงเพลงฮิตติดชาร์ตมาแสดงแทน
             return []
 
-    # 2. ค้นหา "อารมณ์หลัก" (Dominant Mood) ของผู้ใช้
-    if not user_mood_profile:
-        dominant_mood = None
-    else:
-        dominant_mood = max(user_mood_profile, key=user_mood_profile.get)
+    # 2. ค้นหา "อารมณ์หลัก" (Dominant Mood) ของผู้ใช้ (เหมือนเดิม)
+    dominant_mood = max(user_mood_profile, key=user_mood_profile.get) if user_mood_profile else None
     
     print("\n========== AI LOG: DOMINANT USER MOOD ==========")
     print(f"  User's dominant mood for this playlist is: {str(dominant_mood).upper()}")
     print("=============================================\n")
 
-    # 3. ค้นหาเพลงตัวเลือกจาก Last.fm (พร้อมแผนสำรอง)
+    # 3. ค้นหาเพลงตัวเลือกจาก Last.fm (เหมือนเดิม)
     seed_tracks_list = await get_seed_tracks(sp_client)
     candidate_tracks_info = []
     seen_tracks = set()
 
-    # --- แผน A: หาเพลงคล้ายกันจากเพลงของผู้ใช้ ---
+    # ... (ส่วนของ Plan A, B, C ในการหาเพลงเหมือนเดิม) ...
     if seed_tracks_list:
         logging.info("Executing Plan A: Last.fm Similar Tracks from user's seed tracks.")
         tasks = [get_similar_tracks(t['artists'][0]['name'], t['name'], limit=7) for t in seed_tracks_list[:5]]
@@ -174,7 +171,6 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
                     candidate_tracks_info.append(track_info)
                     seen_tracks.add(track_key)
     
-    # --- แผน B: หาเพลงฮิตจากศิลปินโปรดของผู้ใช้ ---
     if not candidate_tracks_info and seed_tracks_list:
         logging.warning("Plan A failed. Executing Fallback #1: Last.fm Artist's Top Tracks.")
         artist_names = list(set(track['artists'][0]['name'] for track in seed_tracks_list))
@@ -187,24 +183,37 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
                     candidate_tracks_info.append(track_info)
                     seen_tracks.add(track_key)
 
-    # --- แผน C: ใช้เพลงฮิตติดชาร์ตประเทศ ---
     if not candidate_tracks_info:
         logging.warning("Fallback #1 failed. Executing Ultimate Fallback: Country Chart.")
-        user_physical_country = (await get_user_profile(sp_client)).get("country", "US")
+        user_profile = await get_user_profile(sp_client)
+        user_physical_country = user_profile.get("country", "US")
         candidate_tracks_info = await get_chart_top_tracks(user_physical_country)
 
     if not candidate_tracks_info:
         logging.error("All recommendation plans have failed.")
         return []
 
-    # 4. วิเคราะห์, ให้คะแนน, และ "จัดกลุ่มตามโทน"
+    # --- 4. (ส่วนที่อัปเกรด) สร้าง Blacklist จากประวัติและ Feedback ---
     logging.info(f"Got {len(candidate_tracks_info)} candidates. Performing Vibe-aware analysis.")
     
+    # ดึงประวัติเพลงที่เคยแนะนำและเพลงที่ผู้ใช้ฟังอยู่แล้ว
+    history_uris = await get_recommendation_history(user_id)
+    existing_uris = {t['uri'] for t in seed_tracks_list}
+    
+    # ดึง Feedback ของผู้ใช้
+    feedback_data = await get_user_feedback(user_id)
+    disliked_uris = feedback_data.get('dislikes', set())
+
+    # รวมทุกอย่างเข้าเป็น Blacklist เดียว!
+    blacklist_uris = existing_uris.union(history_uris).union(disliked_uris)
+    logging.info(f"Total tracks in blacklist (history + dislikes): {len(blacklist_uris)}")
+
+
+    # --- 5. วิเคราะห์, ให้คะแนน, และ "จัดกลุ่มตามโทน" (แก้ไขเล็กน้อย) ---
     primary_vibe_songs = []
     secondary_vibe_songs = []
     
-    existing_uris = {t['uri'] for t in seed_tracks_list}
-    recommended_uris = set()
+    recommended_uris = set() # กันเพลงซ้ำในรอบเดียวกัน
 
     for track_info in candidate_tracks_info:
         query = f"track:{track_info['title']} artist:{track_info['artist']}"
@@ -213,7 +222,10 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
         if not spotify_results: continue
         spotify_track = spotify_results[0]
         track_uri = spotify_track['uri']
-        if track_uri in existing_uris or track_uri in recommended_uris: continue
+        
+        # --- ใช้ Blacklist ที่อัปเกรดแล้วในการกรอง ---
+        if track_uri in blacklist_uris or track_uri in recommended_uris: 
+            continue
 
         cached_analysis = await get_song_analysis_from_db(track_uri)
         song_moods = []
@@ -233,11 +245,17 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
         
         recommended_uris.add(track_uri)
 
-    # 5. จัดลำดับและรวมเพลย์ลิสต์ (ย้ายออกมานอก loop)
+    # 6. จัดลำดับและรวมเพลย์ลิสต์ (เหมือนเดิม)
     primary_vibe_songs.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
     secondary_vibe_songs.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
 
     final_playlist = primary_vibe_songs + secondary_vibe_songs
+    final_playlist_uris = [track['uri'] for track in final_playlist]
+    
+    # --- 7. (ส่วนที่เพิ่มเข้ามา) บันทึกประวัติเพลงที่แนะนำในรอบนี้ ---
+    if final_playlist_uris:
+        await save_recommendation_history(user_id, final_playlist_uris)
+        logging.info(f"Saved {len(final_playlist_uris)} recommended tracks to history for user {user_id}.")
     
     logging.info(f"Found {len(final_playlist)} final tracks. Primary vibe songs: {len(primary_vibe_songs)}")
     return final_playlist[:15]
@@ -268,10 +286,29 @@ async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
 
 async def update_user_profile_background(sp_client: spotipy.Spotify, user_id: str):
     """
-    ฟังก์ชันสำหรับ Background Task เพื่ออัปเดตโปรไฟล์ผู้ใช้
+    (เวอร์ชันฉลาด) ฟังก์ชันสำหรับ Background Task ที่จะเช็คเวลาก่อนอัปเดต
     """
-    logging.info(f"BACKGROUND TASK: Updating mood profile for user {user_id}...")
-    new_profile = await build_user_mood_profile(sp_client)
+    logging.info(f"BACKGROUND TASK: Received request to update profile for user {user_id}...")
+
+    # --- ตรรกะใหม่: เช็คว่าเพิ่งอัปเดตไปหรือยัง ---
+    try:
+        profile_data = await get_user_mood_profile_with_timestamp(user_id)
+        if profile_data:
+            # แปลง timestamp (string) จาก DB กลับเป็น datetime object
+            last_updated_str = profile_data['timestamp']
+            last_updated_dt = datetime.strptime(last_updated_str, '%Y-%m-%d %H:%M:%S')
+
+            # กำหนดว่าถ้าอัปเดตไปภายใน 1 ชั่วโมงล่าสุด จะไม่ทำซ้ำ
+            if datetime.now() - last_updated_dt < timedelta(hours=1):
+                logging.info(f"BACKGROUND TASK: Profile for {user_id} is recent. Skipping update.")
+                return # ออกจากฟังก์ชันทันที
+    except Exception as e:
+        logging.error(f"BACKGROUND TASK: Error checking profile timestamp for {user_id}: {e}")
+        # ถ้าเช็คไม่ได้ ก็ปล่อยให้ทำต่อไปเพื่อความปลอดภัย
+    
+    # --- ถ้าผ่านเงื่อนไขมาได้ ค่อยเริ่มทำงานหนัก ---
+    logging.info(f"BACKGROUND TASK: Profile is old or non-existent. Starting analysis for user {user_id}...")
+    new_profile = await build_user_mood_profile(sp_client, user_id)
     if new_profile:
         await save_user_mood_profile(user_id, new_profile)
         logging.info(f"BACKGROUND TASK: Profile for {user_id} successfully updated.")

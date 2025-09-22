@@ -90,6 +90,28 @@ async def init_db():
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, track_uri)
                 )
+            """)
+             # 9. (ใหม่) ตารางสำหรับเก็บ Feedback ของผู้ใช้
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_feedback (
+                    user_id TEXT NOT NULL,
+                    track_uri TEXT NOT NULL,
+                    feedback TEXT NOT NULL, -- 'like' or 'dislike'
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, track_uri)
+                )
+            """)
+
+            # --- 10. (ใหม่) ตารางสำหรับเก็บเพลย์ลิสต์ที่ Pin ไว้ ---
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pinned_playlists (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    playlist_name TEXT NOT NULL,
+                    songs_json TEXT NOT NULL,
+                    recommendation_text TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
             """)               
             conn.commit()
         finally:
@@ -277,6 +299,65 @@ async def get_user_feedback(user_id: str) -> dict:
                 'dislikes': {row['track_uri'] for row in rows if row['feedback'] == 'dislike'}
             }
             return feedback_data
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)
+
+async def get_user_mood_profile_with_timestamp(user_id: str) -> dict | None:
+    """ดึงโปรไฟล์อารมณ์ของผู้ใช้จากฐานข้อมูล พร้อมกับ timestamp"""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT profile_json, timestamp FROM user_mood_profiles WHERE user_id = ?", (user_id,)).fetchone()
+            if not row:
+                return None
+            
+            return {
+                "profile": json.loads(row['profile_json']),
+                "timestamp": row['timestamp']
+            }
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)
+
+async def add_pinned_playlist(user_id: str, playlist_name: str, songs_data: list, recommendation_text: str):
+    """บันทึกเพลย์ลิสต์ที่ผู้ใช้ Pin ไว้ลงฐานข้อมูล"""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO pinned_playlists (user_id, playlist_name, songs_json, recommendation_text)
+                   VALUES (?, ?, ?, ?)""",
+                (user_id, playlist_name, json.dumps(songs_data, ensure_ascii=False), recommendation_text)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    await asyncio.to_thread(db_operation)
+
+async def get_pinned_playlists_by_user(user_id: str) -> list:
+    """ดึงข้อมูลเพลย์ลิสต์ที่ผู้ใช้เคย Pin ไว้ทั้งหมด"""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            rows = cursor.execute(
+                "SELECT id, playlist_name, songs_json, recommendation_text, timestamp FROM pinned_playlists WHERE user_id = ? ORDER BY timestamp DESC",
+                (user_id,)
+            ).fetchall()
+            
+            playlists = []
+            for row in rows:
+                playlists.append({
+                    "pin_id": row['id'],
+                    "name": row['playlist_name'],
+                    "songs": json.loads(row['songs_json']),
+                    "recommendationText": row['recommendation_text'],
+                    "timestamp": row['timestamp']
+                })
+            return playlists
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)

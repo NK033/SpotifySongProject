@@ -22,3 +22,16 @@ class ChatResponse(BaseModel):
     new_spotify_token_info: Optional[Dict] = None # <-- เพิ่มบรรทัดนี้
     artist_list: Optional[List[str]] = None 
     song_detail: Optional[Dict] = None 
+
+
+class FeedbackRequest(BaseModel):
+    """
+    Model สำหรับ Request ที่เข้ามายัง /feedback endpoint
+    """
+    track_uri: str
+    feedback: str # รับค่าเป็น 'like' หรือ 'dislike'
+
+class PinPlaylistRequest(BaseModel):
+    playlist_name: str
+    songs: List[Dict]
+    recommendation_text: str

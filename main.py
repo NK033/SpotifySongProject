@@ -18,8 +18,8 @@ from recommender import get_intelligent_recommendations, update_user_profile_bac
 from gemini_ai import get_song_analysis_details
 from pydantic import BaseModel
 from typing import List
-from database import save_user_feedback
-
+from database import init_db, save_user_feedback, add_pinned_playlist, get_pinned_playlists_by_user
+from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest
 class FeedbackRequest(BaseModel):
     track_uri: str
     feedback: str # 'like' or 'dislike'
@@ -152,6 +152,71 @@ async def save_feedback_endpoint(req: FeedbackRequest, authorization: Annotated[
     
     logging.info(f"Saved feedback for user {user_id}: {req.feedback} track {req.track_uri}")
     return {"status": "success", "message": f"Feedback '{req.feedback}' saved for track {req.track_uri}."}
+
+# --- เพิ่ม Endpoint ใหม่สำหรับรับ Feedback เข้าไปตรงนี้ ---
+@app.post("/feedback")
+async def save_feedback_endpoint(req: FeedbackRequest, authorization: Annotated[str | None, Header()] = None):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401, detail="Invalid authorization header")
+    
+    token = authorization.split("Bearer ")[1]
+    sp_client = create_spotify_client({"access_token": token})
+
+    try:
+        # ดึงโปรไฟล์เพื่อเอา user_id
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+
+        if not user_id:
+            raise HTTPException(status_code=404, detail="Could not find user.")
+
+        # บันทึก Feedback ลงฐานข้อมูล
+        await save_user_feedback(user_id, req.track_uri, req.feedback)
+        
+        logging.info(f"Feedback saved for user {user_id}: Track {req.track_uri} -> {req.feedback}")
+        
+        return {"status": "success", "message": "Feedback received"}
+
+    except Exception as e:
+        logging.error(f"Error saving feedback: {e}")
+        raise HTTPException(status_code=500, detail="Could not save feedback.")
+
+# --- Endpoint ใหม่สำหรับจัดการเพลย์ลิสต์ที่ปักหมุด ---
+@app.get("/pinned_playlists")
+async def get_pinned_playlists_endpoint(authorization: Annotated[str | None, Header()] = None):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    token = authorization.split("Bearer ")[1]
+    sp_client = create_spotify_client({"access_token": token})
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        if not user_id:
+            raise HTTPException(status_code=404, detail="Could not find user.")
+        
+        pinned_playlists = await get_pinned_playlists_by_user(user_id)
+        return pinned_playlists
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Endpoint ใหม่สำหรับปักหมุดเพลย์ลิสต์ ---
+@app.post("/pin_playlist")
+async def pin_playlist_endpoint(req: PinPlaylistRequest, authorization: Annotated[str | None, Header()] = None):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    token = authorization.split("Bearer ")[1]
+    sp_client = create_spotify_client({"access_token": token})
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        if not user_id:
+            raise HTTPException(status_code=404, detail="Could not find user.")
+        
+        await add_pinned_playlist(user_id, req.playlist_name, req.songs, req.recommendation_text)
+        return {"status": "success", "message": "Playlist pinned successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # --- Main Chat Endpoint (เวอร์ชันสมบูรณ์) ---
 @app.post("/chat", response_model=ChatResponse)
