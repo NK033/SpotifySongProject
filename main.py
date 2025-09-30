@@ -85,16 +85,16 @@ async def get_spotify_client(
 
     token_info = {
         "access_token": access_token,
-        # FIX: Ensure 'refresh_token' key is always present, using "" if the header was not sent (None)
-        "refresh_token": x_refresh_token or "", 
         "expires_at": int(x_expires_at) if x_expires_at else 0,
         "scope": SPOTIFY_SCOPES
     }
     
-    # **Remove the line that filters out None values, as it's no longer necessary 
-    # and was the cause of the problem for 'refresh_token'.**
-    # The rest of the checks ensure non-optional fields are present.
-
+    # ลบค่า None ออกไปก่อนส่งให้ Spotipy <-- ต้องลบหรือยกเลิกโค้ดส่วนนี้!
+    # token_info = {k: v for k, v in token_info.items() if v is not None} <--- ลบทิ้ง
+    
+    if x_refresh_token:
+        token_info["refresh_token"] = x_refresh_token
+    
     if not token_info.get("access_token"):
          raise HTTPException(status_code=401, detail="Missing access token.")
 

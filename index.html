@@ -235,14 +235,12 @@
 
         // (ใหม่) ดึงและแสดงผลเพลย์ลิสต์ที่ Pin ไว้จาก Backend
         async function fetchAndRenderPinnedPlaylists() {
-            const accessToken = localStorage.getItem('spotify_access_token');
-            if (!accessToken) return;
-
-            try {
-                const response = await fetch('/pinned_playlists', { headers: { 'Authorization': `Bearer ${accessToken}` } });
-                if (!response.ok) throw new Error('Could not fetch pinned playlists');
-                
-                pinnedPlaylists = await response.json();
+        try {
+            const headers = getAuthHeaders(); // <-- เรียกใช้ฟังก์ชันใหม่
+            const response = await fetch('/pinned_playlists', { headers });
+            if (!response.ok) throw new Error('Could not fetch pinned playlists');
+            
+            pinnedPlaylists = await response.json();
                 
                 playlistHistoryContainer.innerHTML = ''; // ล้างของเก่า
                 pinnedPlaylists.forEach((item, index) => {
@@ -254,9 +252,13 @@
                     playlistHistoryContainer.appendChild(historyElement);
                 });
             } catch (error) {
-                console.error("Fetch Pinned Error:", error);
+            console.error("Fetch Pinned Error:", error);
+            // อาจจะเพิ่มการจัดการ เช่น ถ้า Error เพราะ Token ให้ Logout
+            if (error.message.includes("User not logged in")) {
+                handleSpotifyLogout();
             }
         }
+    }
 
         // (ใหม่) จัดการเมื่อผู้ใช้กดปุ่ม Pin Playlist
         async function handlePinClick(event) {
@@ -276,7 +278,7 @@
 
                 const response = await fetch('/pin_playlist', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ playlist_name: playlistName, songs: songs, recommendation_text: recText })
                 });
 
@@ -310,9 +312,13 @@
             renderMessage('<p class="text-sm">ออกจากระบบ Spotify แล้ว</p>');
         }
         
-        async function getUserProfile(accessToken) {
+        async function getUserProfile(accessToken) { // accessToken parameter is no longer needed but we can leave it for now
             try {
-                const response = await fetch('/me', { headers: { 'Authorization': `Bearer ${accessToken}` } });
+                // --- บรรทัดที่แก้ไข ---
+                const headers = getAuthHeaders(); // ใช้ฟังก์ชันที่เราสร้างไว้เพื่อเอา Header ทั้งหมด
+                const response = await fetch('/me', { headers: headers }); // ส่ง Header ทั้งชุดเข้าไป
+                // --------------------
+
                 if (!response.ok) throw new Error('Failed to fetch profile from backend');
                 const profile = await response.json();
                 localStorage.setItem('spotify_display_name', profile.display_name);
@@ -344,9 +350,20 @@
             };
 
             try {
+                let headers = { 'Content-Type': 'application/json' };
+                try {
+                    // พยายามดึง Auth Headers ถ้าผู้ใช้ล็อกอินอยู่
+                    const authHeaders = getAuthHeaders();
+                    // นำ Header ทั้งสองชุดมารวมกัน
+                    headers = { ...headers, ...authHeaders };
+                } catch (error) {
+                    // ถ้าดึงไม่ได้ (ผู้ใช้ยังไม่ล็อกอิน) ก็ไม่เป็นไร
+                    console.log("Sending chat message as a guest.");
+                }
+
                 const response = await fetch('/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers, // <--- ใช้ Header ที่เราเตรียมไว้
                     body: JSON.stringify(requestBody)
                 });
                 if (!response.ok) {
@@ -379,10 +396,19 @@
             const trackUris = currentRecommendedSongs.map(s => s.uri);
             showLoading(true);
             try {
-                const accessToken = localStorage.getItem('spotify_access_token');
+                let headers = { 'Content-Type': 'application/json' };
+                try {
+                    // พยายามดึง Auth Headers ถ้าผู้ใช้ล็อกอินอยู่
+                    const authHeaders = getAuthHeaders();
+                    // นำ Header ทั้งสองชุดมารวมกัน
+                    headers = { ...headers, ...authHeaders };
+                } catch (error) {
+                    // ถ้าดึงไม่ได้ (ผู้ใช้ยังไม่ล็อกอิน) ก็ไม่เป็นไร
+                    console.log("Sending chat message as a guest.");
+                }
                 const response = await fetch('/create_playlist', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                    headers: headers, // <-- ใช้ Headers ที่สร้างไว้
                     body: JSON.stringify({ playlist_name: playlistName, track_uris: trackUris })
                 });
                 if (!response.ok) throw new Error('Failed to create playlist');
@@ -411,7 +437,7 @@
             try {
                 const accessToken = localStorage.getItem('spotify_access_token');
                 const response = await fetch(`/song_details/${encodeURIComponent(button.dataset.uri)}`, {
-                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                    headers: getAuthHeaders()
                 });
                 if (!response.ok) throw new Error('Failed to fetch details');
                 const details = await response.json();
@@ -421,6 +447,21 @@
                 document.getElementById('modal-analysis-content').innerHTML = '<p>ไม่สามารถโหลดข้อมูลการวิเคราะห์ได้</p>';
             }
         }
+
+        function getAuthHeaders() {
+            const accessToken = localStorage.getItem('spotify_access_token');
+            if (!accessToken) {
+                // อาจจะโยน Error หรือคืนค่าว่างเพื่อให้ fetch ล้มเหลวและจัดการต่อไป
+                throw new Error("User not logged in");
+            }
+            return {
+                'Authorization': `Bearer ${accessToken}`,
+                'X-Refresh-Token': localStorage.getItem('spotify_refresh_token') || '',
+                'X-Expires-At': localStorage.getItem('spotify_expires_at') || '0',
+                'Content-Type': 'application/json' // เพิ่มไว้เผื่อ POST request
+            };
+        }
+
 
         async function handleFeedback(e) {
                 const button = e.target.closest('.feedback-btn');
@@ -435,7 +476,7 @@
                 try {
                     const response = await fetch('/feedback', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                        headers: getAuthHeaders(),
                         body: JSON.stringify({ track_uri: trackUri, feedback: feedback })
                     });
                     if (!response.ok) throw new Error('Failed to save feedback');
