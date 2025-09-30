@@ -4,7 +4,7 @@ import json
 import os
 import spotipy
 import google.generativeai as genai
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.responses import RedirectResponse
@@ -15,12 +15,12 @@ from recommender import get_intelligent_recommendations
 from lastfm_api import get_chart_top_tracks
 from fastapi import BackgroundTasks
 from recommender import get_intelligent_recommendations, update_user_profile_background
-from gemini_ai import get_song_analysis_details
+from gemini_ai import get_song_analysis_details, summarize_playlist
 from pydantic import BaseModel
 from typing import List
 from database import init_db, save_user_feedback, add_pinned_playlist, get_pinned_playlists_by_user
 from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest
-
+from spotify_api import SPOTIFY_SCOPES, create_spotify_client
 
 
 # --- Logging Configuration ---
@@ -57,6 +57,10 @@ class CreatePlaylistRequest(BaseModel):
     playlist_name: str
     track_uris: List[str]
 
+# --- Model ใหม่สำหรับ Request สรุป Playlist ---
+class SummarizePlaylistRequest(BaseModel):
+    song_uris: List[str]
+
 # --- Middleware, Frontend, DB init ---
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -69,6 +73,33 @@ async def startup_event(): await init_db()
 # --- Auth Endpoints (เหมือนเดิม) ---
 @app.get("/spotify_login")
 async def spotify_login_endpoint(): return RedirectResponse(await get_spotify_auth_url())
+
+async def get_spotify_client(
+    authorization: Annotated[str | None, Header()] = None,
+    x_refresh_token: Annotated[str | None, Header(alias="X-Refresh-Token")] = None,
+    x_expires_at: Annotated[str | None, Header(alias="X-Expires-At")] = None,
+) -> spotipy.Spotify:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    access_token = authorization.split("Bearer ")[1]
+
+    token_info = {
+        "access_token": access_token,
+        # FIX: Ensure 'refresh_token' key is always present, using "" if the header was not sent (None)
+        "refresh_token": x_refresh_token or "", 
+        "expires_at": int(x_expires_at) if x_expires_at else 0,
+        "scope": SPOTIFY_SCOPES
+    }
+    
+    # **Remove the line that filters out None values, as it's no longer necessary 
+    # and was the cause of the problem for 'refresh_token'.**
+    # The rest of the checks ensure non-optional fields are present.
+
+    if not token_info.get("access_token"):
+         raise HTTPException(status_code=401, detail="Missing access token.")
+
+    return create_spotify_client(token_info)
+
 
 @app.get("/callback")
 # --- 1. เพิ่ม background_tasks เข้าไปในฟังก์ชัน ---
@@ -98,47 +129,34 @@ async def spotify_callback_endpoint(request: Request, code: str, background_task
 
 
 @app.get("/me")
-async def get_current_user_profile(authorization: Annotated[str | None, Header()] = None):
-    if not authorization or not authorization.startswith("Bearer "): raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization.split("Bearer ")[1]
-    sp_client = spotipy.Spotify(auth=token)
+async def get_current_user_profile(sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    # สังเกตว่าเราลบโค้ดที่จัดการกับ Header และสร้าง sp_client ออกไปทั้งหมด
+    # เพราะ FastAPI และ get_spotify_client จัดการให้เราแล้ว
     profile_data = await get_user_profile(sp_client)
-    if not profile_data: raise HTTPException(status_code=404, detail="Could not fetch user profile")
+    if not profile_data: 
+        raise HTTPException(status_code=404, detail="Could not fetch user profile")
     return profile_data
 
 @app.post("/create_playlist")
-async def create_playlist_endpoint(req: CreatePlaylistRequest, authorization: Annotated[str | None, Header()] = None):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization.split("Bearer ")[1]
-    sp_client = create_spotify_client({"access_token": token})
-    
+async def create_playlist_endpoint(req: CreatePlaylistRequest, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    # สังเกตว่าเราเปลี่ยน `authorization` เป็น `sp_client` ที่ได้จาก Depends
     try:
         playlist = await create_spotify_playlist(sp_client, req.playlist_name, req.track_uris)
         return {"playlist_info": playlist}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # --- Endpoint ใหม่สำหรับดึงรายละเอียดเพลง ---
 @app.get("/song_details/{song_uri}")
-async def song_details_endpoint(song_uri: str, authorization: Annotated[str | None, Header()] = None):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization.split("Bearer ")[1]
-
-    # ฟังก์ชันนี้ถูกย้ายไป gemini_ai.py แล้ว
-    details = await get_song_analysis_details(token, song_uri)
+async def song_details_endpoint(song_uri: str, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    # ตอนนี้เราส่ง sp_client ทั้ง object ไปเลย ไม่ใช่แค่ token string
+    details = await get_song_analysis_details(sp_client, song_uri)
     return details
 
 # --- Endpoint ใหม่สำหรับบันทึก Feedback ---
 @app.post("/feedback")
-async def save_feedback_endpoint(req: FeedbackRequest, authorization: Annotated[str | None, Header()] = None):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401, detail="Invalid authorization header")
-    
-    token = authorization.split("Bearer ")[1]
-    sp_client = create_spotify_client({"access_token": token})
-
+async def save_feedback_endpoint(req: FeedbackRequest, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
     try:
         # ดึงโปรไฟล์เพื่อเอา user_id
         user_profile = await get_user_profile(sp_client)
@@ -160,11 +178,7 @@ async def save_feedback_endpoint(req: FeedbackRequest, authorization: Annotated[
 
 # --- Endpoint ใหม่สำหรับจัดการเพลย์ลิสต์ที่ปักหมุด ---
 @app.get("/pinned_playlists")
-async def get_pinned_playlists_endpoint(authorization: Annotated[str | None, Header()] = None):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization.split("Bearer ")[1]
-    sp_client = create_spotify_client({"access_token": token})
+async def get_pinned_playlists_endpoint(sp_client: spotipy.Spotify = Depends(get_spotify_client)):
     try:
         user_profile = await get_user_profile(sp_client)
         user_id = user_profile.get('id')
@@ -179,11 +193,7 @@ async def get_pinned_playlists_endpoint(authorization: Annotated[str | None, Hea
 
 # --- Endpoint ใหม่สำหรับปักหมุดเพลย์ลิสต์ ---
 @app.post("/pin_playlist")
-async def pin_playlist_endpoint(req: PinPlaylistRequest, authorization: Annotated[str | None, Header()] = None):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization.split("Bearer ")[1]
-    sp_client = create_spotify_client({"access_token": token})
+async def pin_playlist_endpoint(req: PinPlaylistRequest, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
     try:
         user_profile = await get_user_profile(sp_client)
         user_id = user_profile.get('id')
@@ -195,13 +205,24 @@ async def pin_playlist_endpoint(req: PinPlaylistRequest, authorization: Annotate
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
+# --- Endpoint ใหม่สำหรับสรุป Playlist ---
+@app.post("/summarize_playlist")
+async def summarize_playlist_endpoint(req: SummarizePlaylistRequest, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        summary = await summarize_playlist(sp_client, req.song_uris)
+        return {"summary": summary}
+    except Exception as e:
+        # Log a more detailed error if possible
+        logging.error(f"Error in summarize_playlist_endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
 # --- Main Chat Endpoint (เวอร์ชันสมบูรณ์) ---
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundTasks): # <-- เพิ่ม background_tasks
+    sp_client: spotipy.Spotify = Depends(get_spotify_client)
     try:
         user_message = chat_request.message
-        token = chat_request.spotify_access_token
+        
 
         intent_model = genai.GenerativeModel("gemini-1.5-flash")
         # --- Prompt ที่อัปเดตแล้วเพื่อแยกแยะเจตนา ---
@@ -217,17 +238,8 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
         intent = intent_response.text.strip().casefold()
         logging.info(f"User Intent Classified as: '{intent}'")
 
-        # สร้าง sp_client ไว้ล่วงหน้าหากมีการ login
-        sp_client = None
-        if token:
-            sp_client = create_spotify_client({
-                "access_token": token,
-                "refresh_token": chat_request.spotify_refresh_token,
-                "scope": "user-read-private playlist-modify-public", # เพิ่ม scope ที่จำเป็น
-                "expires_at": chat_request.expires_at or 0
-            })
+        
 
-       # --- PATH 1: ระบบแนะนำเพลงอัจฉริยะ (Personalized) ---
         if "get_recommendations" in intent:
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
@@ -235,13 +247,30 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
             user_profile = await get_user_profile(sp_client)
             user_id = user_profile.get('id')
 
-            logging.info("Executing intelligent recommendation path.")
-            recommended_songs = await get_intelligent_recommendations(sp_client, user_id)
-
-            # --- สั่งให้อัปเดตโปรไฟล์เบื้องหลัง! ---
+            # --- สั่งให้อัปเดตโปรไฟล์เบื้องหลัง (ย้ายมาทำก่อน) ---
+            # เพื่อให้โปรไฟล์สดใหม่อยู่เสมอสำหรับการใช้งานครั้งถัดไป
             if user_id:
                 background_tasks.add_task(update_user_profile_background, sp_client, user_id)
             # ------------------------------------
+
+            logging.info("Executing intelligent recommendation path.")
+            
+            # --- (หัวใจของการแก้ไข) พยายามดึงโปรไฟล์ที่คำนวณไว้แล้วจาก DB ก่อน ---
+            from database import get_user_mood_profile # Import เฉพาะจุด
+            cached_mood_profile = await get_user_mood_profile(user_id)
+
+            if not cached_mood_profile:
+                logging.warning(f"No cached profile for {user_id}. Building for the first time...")
+                # ถ้าไม่เจอจริงๆ (เช่น user ใหม่) ค่อยสร้างสดๆ เป็นครั้งแรก
+                from recommender import build_user_mood_profile
+                cached_mood_profile = await build_user_mood_profile(sp_client, user_id)
+                if not cached_mood_profile:
+                     return ChatResponse(response="ขออภัยค่ะ ฉันยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อยนะคะ")
+
+            # --- ส่งโปรไฟล์ที่ "เตรียมไว้แล้ว" เข้าไปในฟังก์ชันแนะนำเพลง ---
+            # หมายเหตุ: เราอาจจะต้องไปแก้ get_intelligent_recommendations ให้รับ mood_profile เข้าไปด้วย
+            recommended_songs = await get_intelligent_recommendations(sp_client, user_id, cached_mood_profile)
+
 
             if not recommended_songs:
                 return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้")
