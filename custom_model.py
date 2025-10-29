@@ -1,18 +1,14 @@
-# custom_model.py
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import os
+import numpy as np
 
 # --- การตั้งค่า ---
-# ระบุตำแหน่งของโมเดลที่เราเทรนเสร็จแล้ว
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "Tune", "my-awesome-lyrics-emotion-model")
-# ...
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "Tune", "my-awesome-multilingual-emotion-model-final")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 print(f"Initializing custom model from '{MODEL_PATH}' on device '{DEVICE}'...")
 
-# --- โหลด Tokenizer และ Model ที่ผ่านการ Fine-tune ---
-# เราโหลดแค่ครั้งเดียวตอนเริ่มต้น เพื่อให้พร้อมใช้งานตลอดเวลา
 try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH).to(DEVICE)
@@ -22,12 +18,15 @@ except Exception as e:
     tokenizer = None
     model = None
 
-def predict_moods(lyrics: str):
+def predict_moods(lyrics: str) -> dict:
     """
-    วิเคราะห์อารมณ์จากเนื้อเพลงโดยใช้โมเดลที่เรา Fine-tune เอง
+    (เวอร์ชันใหม่ - The Conductor)
+    วิเคราะห์อารมณ์จากเนื้อเพลงและคืนค่าเป็น "Emotional Fingerprint"
+    (Dictionary ที่มีครบทุกอารมณ์พร้อมค่าความน่าจะเป็น)
     """
-    if not model or not tokenizer:
-        return []
+    if not model or not tokenizer or not lyrics:
+        # คืนค่า Fingerprint ว่างเปล่าถ้าไม่มีข้อมูล
+        return {label: 0.0 for label in model.config.id2label.values()}
 
     # 1. Tokenize เนื้อเพลง
     inputs = tokenizer(lyrics, return_tensors="pt", truncation=True, padding=True, max_length=512).to(DEVICE)
@@ -36,13 +35,13 @@ def predict_moods(lyrics: str):
     with torch.no_grad():
         logits = model(**inputs).logits
 
-    # 3. แปลงผลลัพธ์เป็นความน่าจะเป็น และเลือก Label ที่มีความมั่นใจสูง
-    probabilities = torch.sigmoid(logits).squeeze().cpu().numpy()
-    threshold = 0.5 # กำหนดเกณฑ์ความมั่นใจ
+    # 3. แปลงผลลัพธ์ (logits) เป็นความน่าจะเป็น (probabilities)
+    # ใช้ Sigmoid function เพราะเป็นงาน Multi-label classification
+    sigmoid = torch.nn.Sigmoid()
+    probabilities = sigmoid(logits).squeeze().cpu().numpy()
     
-    moods = []
-    for i, prob in enumerate(probabilities):
-        if prob > threshold:
-            moods.append(model.config.id2label[i])
+    # 4. สร้าง "Emotional Fingerprint" (Dictionary)
+    # โดยจับคู่ชื่ออารมณ์กับค่าความน่าจะเป็นของมัน
+    emotional_fingerprint = {model.config.id2label[i]: prob for i, prob in enumerate(probabilities)}
             
-    return moods
+    return emotional_fingerprint

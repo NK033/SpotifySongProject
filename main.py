@@ -218,13 +218,12 @@ async def summarize_playlist_endpoint(req: SummarizePlaylistRequest, sp_client: 
     
 # --- Main Chat Endpoint (เวอร์ชันสมบูรณ์) ---
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundTasks): # <-- เพิ่ม background_tasks
-    sp_client: spotipy.Spotify = Depends(get_spotify_client)
+async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundTasks, sp_client: spotipy.Spotify = Depends(get_spotify_client)): # <-- เพิ่ม background_tasks
     try:
         user_message = chat_request.message
         
 
-        intent_model = genai.GenerativeModel("gemini-1.5-flash")
+        intent_model = genai.GenerativeModel("gemini-2.0-flash")
         # --- Prompt ที่อัปเดตแล้วเพื่อแยกแยะเจตนา ---
         intent_prompt = f"""Analyze the user's request. What is the user's primary intent?
         Choose ONE of the following options:
@@ -276,7 +275,7 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
                 return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้")
 
              # --- Prompt ใหม่: ปรับโทนให้ Professional ---
-            presentation_model = genai.GenerativeModel("gemini-1.5-flash")
+            presentation_model = genai.GenerativeModel("gemini-2.0-flash")
             song_titles = ", ".join([f"'{s['name']}'" for s in recommended_songs])
             
             presentation_prompt = f"""
@@ -315,7 +314,7 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
                 if spotify_results:
                     chart_songs_on_spotify.append(spotify_results[0])
             
-            presentation_model = genai.GenerativeModel("gemini-1.5-flash")
+            presentation_model = genai.GenerativeModel("gemini-2.0-flash")
             songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in chart_songs_on_spotify])
             presentation_prompt = f"นำเสนอรายการเพลงฮิตติดชาร์ตเหล่านี้ในภาษาที่เป็นกันเองและน่าสนใจ (ตอบเป็นภาษาไทย):\n\n{songs_for_prompt}"
             final_response = await presentation_model.generate_content_async(presentation_prompt)
@@ -327,7 +326,7 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะใช้เครื่องมือนี้ได้ค่ะ")
 
             logging.info("Executing tool usage path.")
-            tool_model = genai.GenerativeModel("gemini-1.5-flash")
+            tool_model = genai.GenerativeModel("gemini-2.0-flash")
             available_tools = [search_spotify_songs, create_spotify_playlist]
             
             prompt_context = "[System Context]\nThe user is logged in.\n[/System Context]\n\n"
@@ -356,7 +355,7 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
         else:
             logging.info("Executing general chat path.")
             chat_model = genai.GenerativeModel(
-                "gemini-1.5-flash",
+                "gemini-2.0-flash",
                 system_instruction="You are a friendly AI music assistant. Your primary conversational language is Thai. Write all explanations and conversational parts in Thai. However, you MUST use the original language for proper nouns like song titles and artist names (e.g., 'Butter' by BTS, 'ดีใจด้วยนะ' by อิ้งค์ วรันธร). Do not translate these proper nouns.",
             )
             chat_response = await chat_model.generate_content_async(user_message)
