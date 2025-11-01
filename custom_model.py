@@ -42,6 +42,6 @@ def predict_moods(lyrics: str) -> dict:
     
     # 4. สร้าง "Emotional Fingerprint" (Dictionary)
     # โดยจับคู่ชื่ออารมณ์กับค่าความน่าจะเป็นของมัน
-    emotional_fingerprint = {model.config.id2label[i]: prob for i, prob in enumerate(probabilities)}
+    emotional_fingerprint = {model.config.id2label[i]: float(prob) for i, prob in enumerate(probabilities)}
             
     return emotional_fingerprint

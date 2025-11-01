@@ -1,79 +1,57 @@
 # gemini_ai.py
+import logging
 import google.generativeai as genai
 import json
-from fastapi import HTTPException, status
 import asyncio
 import spotipy
-from config import Config
+from fastapi import HTTPException, status
 from database import save_song_analysis_to_db, get_song_analysis_from_db
 from genius_api import get_lyrics
 from custom_model import predict_moods
+from spotify_api import get_spotify_track_data
 
-# ตั้งค่า Gemini API
+# === Centralized Model Configuration ===
+TEXT_MODEL = genai.GenerativeModel(
+    'gemini-2.0-flash',
+    system_instruction="คุณคือผู้ช่วยและนักวิจารณ์ดนตรีที่เชี่ยวชาญ สามารถวิเคราะห์เพลงได้อย่างแม่นยำและเขียนอธิบายได้อย่างเป็นธรรมชาติ"
+)
 
+JSON_MODEL = genai.GenerativeModel(
+    'gemini-2.0-flash',
+    generation_config={"response_mime_type": "application/json"}
+)
+# =======================================
 
 async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
     """
-    (เวอร์ชันใหม่) วิเคราะห์ข้อมูลเพลงด้วย Gemini โดยใช้ข้อมูลอารมณ์จากโมเดลที่เรา Fine-tune
+    (V-Final) วิเคราะห์เพลงด้วย Gemini และให้ 'บทสรุปที่กระชับ' แทนการวิเคราะห์ยาวๆ
     """
-    print(f"Analyzing '{spotify_track_data.get('name')}' with Gemini, powered by our custom model...")
-    
+    logging.info(f"Analyzing '{spotify_track_data.get('name')}' for a concise summary...")
     artist_name = spotify_track_data.get('artists', [{}])[0].get('name', 'N/A')
     song_title = spotify_track_data.get('name', 'N/A')
     
-    # --- (เปลี่ยนแปลง) วิเคราะห์อารมณ์ด้วยโมเดลของเรา ---
-    # 1. ดึงเนื้อเพลง
     lyrics = await get_lyrics(artist_name, song_title)
-    
-    # 2. ให้โมเดลผู้เชี่ยวชาญของเราวิเคราะห์
-    predicted_moods = []
-    if lyrics:
-        predicted_moods = predict_moods(lyrics) # ['sadness', 'love', 'remorse']
-    
-    # แปลง List ของอารมณ์ให้เป็น String ที่อ่านง่ายสำหรับ Prompt
+    predicted_moods = predict_moods(lyrics) if lyrics else []
     moods_text = ", ".join(predicted_moods) if predicted_moods else "ไม่สามารถระบุได้"
     
-    # --- (เปลี่ยนแปลง) อัปเกรด Prompt ให้ใช้ข้อมูลจากโมเดลของเรา ---
     prompt_content = f"""
-    คุณเป็นนักวิเคราะห์ดนตรีมืออาชีพ โปรดวิเคราะห์เพลงต่อไปนี้อย่างละเอียดและให้ข้อมูลเชิงลึก
-    ชื่อเพลง: {song_title}
-    ศิลปิน: {artist_name}
+    คุณเป็นนักวิเคราะห์ดนตรีมืออาชีพ โปรด "สรุปภาพรวม" ของเพลงต่อไปนี้ให้กระชับและเข้าใจง่าย
 
-    นี่คือข้อมูลสำคัญที่ได้จากการวิเคราะห์เนื้อเพลงด้วยโมเดล AI เฉพาะทางของเรา:
-    - **อารมณ์หลักที่ตรวจพบ (Main Emotions): {moods_text}**
+    - ชื่อเพลง: {song_title}
+    - ศิลปิน: {artist_name}
+    - อารมณ์หลักที่ตรวจพบจากเนื้อเพลง: {moods_text}
 
-    จากข้อมูลข้างต้น โปรดวิเคราะห์เพลงนี้ให้ครอบคลุมหัวข้อต่อไปนี้:
-    1.  **แนวเพลง (Genre):** ระบุแนวเพลงหลักและแนวเพลงย่อย
-    2.  **อารมณ์และบรรยากาศ (Mood & Vibe):** อธิบายว่าเพลงนี้ให้อารมณ์แบบใด โดยอ้างอิงจาก "อารมณ์หลักที่ตรวจพบ" ข้างต้น
-    3.  **การวิเคราะห์เนื้อเพลง (Lyrical Analysis):** อธิบายความหมายโดยรวมของเนื้อเพลง และความสัมพันธ์กับอารมณ์ที่ตรวจพบ
-    4.  **เครื่องดนตรี (Instrumentation):** ระบุเครื่องดนตรีที่โดดเด่น
-    
-    โปรดตอบกลับเป็นภาษาไทยเท่านั้น และจัดรูปแบบให้อ่านง่าย
+    **คำสั่ง:**
+    โปรดเขียนสรุปเพลงนี้ใน **1 ย่อหน้าที่อ่านง่าย (ประมาณ 4-5 ประโยค)** โดยให้ครอบคลุมถึง แนวเพลง, อารมณ์โดยรวม, และลักษณะเด่นของดนตรีหรือเนื้อหา ไม่ต้องแยกเป็นข้อๆ
     """
     
-    # 3. ให้ Gemini วิเคราะห์และเขียนบทวิจารณ์
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        system_instruction="คุณคือผู้ช่วยและนักวิจารณ์ดนตรีที่เชี่ยวชาญ สามารถวิเคราะห์เพลงได้อย่างแม่นยำและเขียนอธิบายได้อย่างเป็นธรรมชาติ"
-    )
-    
     try:
-        response = model.generate_content(prompt_content)
-        analysis_text = response.text
-        
-        # สร้างโครงสร้างข้อมูลที่จะบันทึกลง Database
-        # เราจะเปลี่ยน lyrical_analysis เป็น predicted_moods เพื่อให้สื่อความหมายตรงตัว
-        combined_analysis = {
-            "gemini_analysis": analysis_text,
-            "predicted_moods": predicted_moods # บันทึกผลจากโมเดลของเราโดยตรง
-        }
-        
+        response = await TEXT_MODEL.generate_content_async(prompt_content)
+        combined_analysis = { "gemini_analysis": response.text, "predicted_moods": predicted_moods }
         await save_song_analysis_to_db(spotify_track_data, combined_analysis)
-        
         return combined_analysis
-
     except Exception as e:
-        print(f"Error calling Gemini API for song analysis: {e}")
+        logging.error(f"Error calling Gemini API for song analysis: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error analyzing song with Gemini API.")
 
 async def get_song_analysis_details(sp_client: spotipy.Spotify, song_uri: str) -> dict:
@@ -83,144 +61,196 @@ async def get_song_analysis_details(sp_client: spotipy.Spotify, song_uri: str) -
     analysis_data = await get_song_analysis_from_db(song_uri)
     if analysis_data:
         return analysis_data
-        
-    from spotify_api import get_spotify_track_data
-    
     try:
-        # เราต้องส่ง sp_client เข้าไปในฟังก์ชันด้วย
         spotify_track_data = await get_spotify_track_data(sp_client, song_uri)
         return await analyze_and_store_song_analysis(spotify_track_data)
-    except HTTPException as e:
-        raise e
     except Exception as e:
+        logging.error(f"Failed to get song details for URI {song_uri}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get song details: {e}")
 
-async def summarize_playlist(user_spotify_access_token: str, song_uris: list[str]) -> str:
+async def summarize_playlist(sp_client: spotipy.Spotify, song_uris: list[str]) -> str:
     """
-    ให้ Gemini สรุปภาพรวมของ Playlist จากข้อมูลการวิเคราะห์เพลง
+    (V-Final) ให้ Gemini สรุปภาพรวมของ Playlist อย่างชาญฉลาด
     """
-    if not user_spotify_access_token:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Spotify access token is required for summarizing playlist.")
+    tasks = [get_song_analysis_details(sp_client, uri) for uri in song_uris]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    all_song_analyses = []
-    for uri in song_uris:
-        try:
-            analysis = await get_song_analysis_details(user_spotify_access_token, uri)
-            all_song_analyses.append(analysis)
-        except HTTPException as e:
-            print(f"Warning: Could not get analysis for URI {uri}: {e.detail}")
+    valid_analyses = [res for res in results if not isinstance(res, Exception)]
 
-    if not all_song_analyses:
-        return "ไม่สามารถสรุปเพลย์ลิสต์ได้ในขณะนี้"
-
-    # สร้าง prompt สำหรับสรุปเพลย์ลิสต์
-    prompt = "โปรดสรุปภาพรวมของเพลย์ลิสต์นี้จากข้อมูลการวิเคราะห์เพลงต่อไปนี้:\n\n"
-    for i, analysis in enumerate(all_song_analyses):
-        prompt += f"--- เพลงที่ {i+1}: ---\n"
-        # ใช้เฉพาะการวิเคราะห์ของ Gemini เพื่อการสรุปภาพรวมของเพลย์ลิสต์
-        prompt += analysis.get('gemini_analysis', 'ไม่มีข้อมูลการวิเคราะห์') + "\n\n"
-    prompt += "โปรดสรุปเป็นภาษาไทยอย่างละเอียด โดยเน้นแนวเพลง อารมณ์ เครื่องดนตรี และลักษณะเด่นของเพลย์ลิสต์นี้โดยรวม"
-
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        system_instruction="คุณคือผู้ช่วยที่เชี่ยวชาญด้านดนตรีไทยและสากล"
-    )
+    prompt = "นี่คือข้อมูลการวิเคราะห์ของแต่ละเพลงในเพลย์ลิสต์:\n\n"
+    for i, analysis in enumerate(valid_analyses):
+        prompt += f"--- เพลงที่ {i+1} ---\n{analysis.get('gemini_analysis', 'ไม่มีข้อมูล')}\n\n"
+    
+    prompt += """
+    **คำสั่งของคุณ:**
+    ในฐานะ 'ภัณฑารักษ์ดนตรี' (Music Curator) มืออาชีพ โปรดเขียนบทสรุปสำหรับเพลย์ลิสต์นี้
+    
+    **ห้ามทำ:** อย่าแค่สรุปว่าเพลย์ลิสต์นี้มีแนวเพลงหรืออารมณ์อะไรบ้าง
+    
+    **สิ่งที่ต้องทำ:**
+    1.  อธิบายว่า **ทำไม** เพลงเหล่านี้ถึงถูกจัดมาอยู่ด้วยกัน
+    2.  ค้นหา **"ธีมที่เชื่อมโยง" (Unifying Theme)** หรือ **"DNA ทางดนตรี" (Musical DNA)** ที่เป็นหัวใจหลักของเพลย์ลิสต์นี้
+    3.  อธิบายธีมนั้นให้ผู้ฟังเข้าใจอย่างชัดเจน (ตัวอย่างเช่น: "นี่คือเพลย์ลิสต์ที่รวมเพลง J-Pop Rock ที่มีพลังสูง โดดเด่นด้วยจังหวะที่หนักแน่นและเสียงร้องหญิงที่ทรงพลัง")
+    
+    โปรดตอบเป็นภาษาไทยที่อ่านง่ายและลื่นไหล
+    """
 
     try:
-        response = model.generate_content(prompt)
+        response = await TEXT_MODEL.generate_content_async(prompt)
         return response.text
     except Exception as e:
-        print(f"Error calling Gemini API for playlist summary: {e}")
+        logging.error(f"Error calling Gemini API for playlist summary: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error summarizing playlist.")
 
 async def get_gemini_seed_expansion(top_tracks: list[dict]) -> list[dict]:
     """
-    (V3) ให้ Gemini วิเคราะห์ "ภาษา" และ "แนวเพลง" และบังคับให้ยึดตามนั้น
+    (V-DNA) Finds the unifying "Musical" and "Creator" DNA.
     """
-    print("--- Executing Plan B: Gemini-Powered Seed Expansion (V3 - Strict Prompt) ---")
+    logging.info("--- Executing Gemini Seed Expansion (V-DNA) ---")
+    track_list_str = "\n".join([f"- '{t['name']}' by {t['artists'][0]['name']}" for t in top_tracks[:10]])
     
-    track_list_str = "\n".join([f"- '{track['name']}' by {track['artists'][0]['name']}" for track in top_tracks[:10]])
-    
+    # FINAL VERSION: This prompt combines both "Musical" and "Creator" DNA.
     prompt = f"""
-    You are a World-class Musicologist. Your task is to analyze a user's favorite songs and recommend new music.
+    You are a versatile, world-class music curator.
 
-    **User's Favorite Songs:**
+    **Listener's Favorites:**
     {track_list_str}
 
-    **Your mission, in two steps:**
-    
-    **Step 1: Analysis**
-    First, analyze the list above and determine the user's primary listening language and primary genre.
+    **Your Mission: Find the Unifying "DNA"**
 
-    **Step 2: Recommendation**
-    Based *only* on the language and genre you identified in Step 1, recommend 10 other artists and tracks.
-    - **Crucial Rule:** The recommended tracks **MUST** be in the same primary language you identified. For example, if the user listens to Thai music, you must recommend other Thai music. Do not recommend international artists.
-    - Focus on artists that have a similar style or belong to the same music scene.
+    1.  **Analyze the "Musical DNA":**
+        First, find the core sound.
+        * **Energy & Tempo:** (e.g., high-energy, fast, dramatic)
+        * **Instrumentation:** (e.g., heavy rock guitars, orchestral strings, pop synths)
+        * **Vocal Style:** (e.g., passionate, strong female vocal)
 
-    **Response format requirement:**
-    - You **MUST** respond with a perfectly structured JSON object and nothing else.
-    - The JSON structure must be: {{"recommendations": [{{"artist": "artist_name", "track": "track_name"}}]}}
+    2.  **Analyze the "Creator DNA":**
+        Second, look for patterns in who made the music. This is just as important.
+        * **Artists:** Are there recurring artists? (e.g., Aimer, Eir Aoi)
+        * **Composers:** Is there a common composer? (e.g., Hiroyuki Sawano)
+        * **Franchise/CVs:** Is there a link to a franchise or voice actor?
+
+    3.  **Crucial Example:**
+        A user's list has **'START:DASH!!' (by μ's)** and **'IGNITE' (by Eir Aoi)**.
+        * **Correct Analysis:** 'This is **one single vibe**. The *unifying DNA* is: 1) high-energy tempo, 2) powerful rock/pop instrumentation, 3) a passionate female vocal, AND 4) a taste for prolific female anisong artists (μ's and Eir Aoi both fit this creator profile).'
+
+    4.  **Curate Recommendations (Your Strategy):**
+        Your recommendations *must* be a blend based on this complete DNA.
+        * **Priority 1:** Find more songs from the **same artists** (or composers/CVs) that *also* match the **Musical DNA**.
+        * **Priority 2:** Find songs from **new artists** that are a perfect match for the *entire* DNA profile (both musical and creator vibe).
+
+    **Response Format Requirement (Crucial):**
+    Respond with a JSON object: {{"recommendations": [{{"artist": "artist_name", "track": "track_name"}}]}}
     """
-
-    model = genai.GenerativeModel(
-        'gemini-2.0-flash',
-        generation_config={"response_mime_type": "application/json"}
-    )
-    
     try:
-        response = await model.generate_content_async(prompt)
+        response = await JSON_MODEL.generate_content_async(prompt)
         data = json.loads(response.text)
-        
-        gemini_recommendations = [
-            {"artist": item["artist"], "title": item["track"]} 
-            for item in data.get("recommendations", [])
-        ]
-        
-        print(f"✅ Gemini V3 dynamically analyzed language/genre and found {len(gemini_recommendations)} new seed tracks.")
-        return gemini_recommendations
-        
+        recommendations = [{"artist": item["artist"], "title": item["track"]} for item in data.get("recommendations", [])]
+        logging.info(f"✅ Gemini V-DNA found {len(recommendations)} new seed tracks.")
+        return recommendations
     except Exception as e:
-        print(f"❌ Error during Gemini Seed Expansion: {e}")
+        logging.error(f"❌ Error during Gemini Seed Expansion: {e}", exc_info=True)
         return []
-    
+
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     """
-    (หน่วยกู้ภัย) รับรายชื่อเพลงที่หาเนื้อเพลงไม่เจอ แล้วให้ Gemini ช่วยสรุปใจความสำคัญ
-    เพื่อนำไปใช้ในการวิเคราะห์อารมณ์ต่อไป
+    (V3 - Robust) Finds lyrics using detailed metadata and safe-key mapping
+    to prevent API response errors.
     """
-    if not failed_tracks:
-        return {}
+    if not failed_tracks: return {}
+    logging.info(f"--- Activating Gemini Lyric Finder (Robust V3) for {len(failed_tracks)} tracks... ---")
 
-    print(f"\n--- 🆘 Activating Gemini Rescuer for {len(failed_tracks)} tracks... ---")
+    # Step 1: Create a list of tracks with safe IDs and a map to convert them back
+    tracks_for_prompt = []
+    id_to_key_map = {}  # e.g., {"track_1": "Artist Name - Song Name"}
+    
+    for i, track in enumerate(failed_tracks):
+        artist = track.get('artists', [{}])[0].get('name', 'N/A')
+        title = track.get('name', 'N/A')
+        
+        track_key = f"{artist} - {title}"  # The final key we want
+        track_id = f"track_{i+1}"          # The safe key for the API
+        
+        id_to_key_map[track_id] = track_key
+        
+        tracks_for_prompt.append({
+            "id": track_id,  # Give the API the safe key
+            "artist": artist,
+            "track": title,
+            "album": track.get('album', {}).get('name'),
+            "release_year": track.get('album', {}).get('release_date', '----')[:4],
+            "spotify_url": track.get('external_urls', {}).get('spotify')
+        })
 
-    # สร้าง "รายการเป้าหมาย" ที่ชัดเจนสำหรับ Gemini
-    track_list_str = "\n".join([f"- \"{track['name']}\" by {track['artists'][0]['name']}" for track in failed_tracks])
-
+    # Step 2: Create a simpler, more robust prompt using the safe IDs
     prompt = f"""
-    คุณคือผู้ช่วยวิเคราะห์ดนตรีที่มีความสามารถในการค้นหาข้อมูลสูงมาก
-    สำหรับรายชื่อเพลงต่อไปนี้ ฉันไม่สามารถหาเนื้อเพลงเต็มๆ ได้:
-    {track_list_str}
+    You are an expert, multilingual lyric search engine. Find the full, accurate lyrics for the songs in this JSON: {json.dumps(tracks_for_prompt, ensure_ascii=False)}.
 
-    **ภารกิจของคุณคือ:**
-    1.  สำหรับแต่ละเพลงในรายการ โปรดช่วยค้นหาและ **"สรุปใจความสำคัญของเนื้อเพลง"** ที่สื่อถึงอารมณ์ให้ได้สั้นที่สุด (ประมาณ 1-2 ประโยค) โดยใช้ Token ให้น้อยที่สุดเท่าที่เป็นไปได้
-    2.  หากไม่พบเนื้อเพลงจริงๆ หรือเป็นเพลงบรรเลง ให้ตอบกลับเป็น "Instrumental"
-
-    **เงื่อนไขการตอบกลับ (สำคัญที่สุด):**
-    - ต้องตอบกลับมาเป็น JSON object ที่สมบูรณ์แบบเท่านั้น
-    - โครงสร้างของ JSON ต้องเป็น dictionary ที่มี key เป็น "ชื่อเพลง - ชื่อศิลปิน" และ value เป็น "บทสรุปเนื้อเพลง"
-    - ตัวอย่าง: {{"เพลง A - ศิลปิน X": "เกี่ยวกับความรักที่ไม่สมหวัง", "เพลง B - ศิลปิน Y": "Instrumental"}}
+    **Response Format Requirement (Crucial):**
+    - You MUST respond with a perfectly structured JSON object.
+    - The key for each entry must be the "id" from the input (e.g., "track_1", "track_2").
+    - The value must be a single string containing the full lyrics, or "" if not found.
+    - Do NOT summarize or translate.
+    
+    **Example Response:**
+    {{
+      "track_1": "Full lyrics for the first song...",
+      "track_2": "ここに歌詞が入ります...",
+      "track_3": ""
+    }}
     """
     
-    model = genai.GenerativeModel(
-        'gemini-2.0-flash',
-        generation_config={"response_mime_type": "application/json"}
-    )
-
     try:
-        response = await model.generate_content_async(prompt)
-        rescued_data = json.loads(response.text)
-        print(f"✅ Gemini Rescuer successfully summarized {len(rescued_data)} tracks.")
-        return rescued_data
+        response = await JSON_MODEL.generate_content_async(prompt)
+        api_response_data = json.loads(response.text)
+
+        # Step 3: Check the response and map the IDs back to the "artist - track" keys
+        if isinstance(api_response_data, dict):
+            # This is the expected behavior
+            
+            # Create the final dictionary using the map
+            rescued_data = {}
+            for track_id, lyrics in api_response_data.items():
+                if track_id in id_to_key_map:
+                    artist_track_key = id_to_key_map[track_id]
+                    rescued_data[artist_track_key] = lyrics
+            
+            found_count = sum(1 for lyric in rescued_data.values() if lyric)
+            logging.info(f"✅ Gemini Lyric Finder retrieved lyrics for {found_count}/{len(failed_tracks)} tracks.")
+            return rescued_data
+        else:
+            # This handles the case where the API *still* returns a list
+            logging.error(f"❌ Gemini Lyric Finder API did not return a dictionary. Got {type(api_response_data)} instead.")
+            return {} 
+
     except Exception as e:
-        print(f"❌ Error during Gemini Rescue mission: {e}")
+        # This catches other errors, like the 500 error from before
+        logging.error(f"❌ Error during Gemini Lyric Finder mission: {e}", exc_info=True)
         return {}
+
+async def get_filler_tracks_with_lyrics(existing_tracks: list[dict]) -> list[dict]:
+    """
+    (V8) Recommends songs to complete a short playlist.
+    """
+    if not existing_tracks: return []
+    logging.info("--- Activating Gemini Playlist Filler... ---")
+    track_list_str = "\n".join([f"- '{t['name']}' by {t['artists'][0]['name']}" for t in existing_tracks])
+
+    prompt = f"""
+    This playlist is too short:
+    {track_list_str}
+    Recommend up to 20 more songs that perfectly match the existing songs' genre, language, and emotional vibe.
+    **Response Format Requirement (Crucial):**
+    - Respond with a JSON object containing a single key "filler_tracks".
+    - The value must be a list of objects, each with three keys: "artist", "track", and "lyrics_summary".
+    - "lyrics_summary" should be a concise, one-sentence summary of the song's lyrical theme.
+    """
+    try:
+        response = await JSON_MODEL.generate_content_async(prompt)
+        data = json.loads(response.text)
+        filler_tracks = data.get("filler_tracks", [])
+        logging.info(f"✅ Gemini Filler found {len(filler_tracks)} emergency candidates.")
+        return filler_tracks
+    except Exception as e:
+        logging.error(f"❌ Error during Gemini Filler mission: {e}", exc_info=True)
+        return []

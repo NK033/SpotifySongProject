@@ -35,3 +35,10 @@ class PinPlaylistRequest(BaseModel):
     playlist_name: str
     songs: List[Dict]
     recommendation_text: str
+
+class UpdatePlaylistRequest(BaseModel):
+    """
+    Model for request to update a pinned playlist.
+    """
+    playlist_name: str
+    songs: List[Dict]

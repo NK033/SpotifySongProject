@@ -21,6 +21,7 @@ from typing import List
 from database import init_db, save_user_feedback, add_pinned_playlist, get_pinned_playlists_by_user
 from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest
 from spotify_api import SPOTIFY_SCOPES, create_spotify_client
+from models import UpdatePlaylistRequest
 
 
 # --- Logging Configuration ---
@@ -218,7 +219,11 @@ async def summarize_playlist_endpoint(req: SummarizePlaylistRequest, sp_client: 
     
 # --- Main Chat Endpoint (เวอร์ชันสมบูรณ์) ---
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundTasks, sp_client: spotipy.Spotify = Depends(get_spotify_client)): # <-- เพิ่ม background_tasks
+async def chat_endpoint(
+    chat_request: ChatRequest, 
+    background_tasks: BackgroundTasks, 
+    sp_client: spotipy.Spotify = Depends(get_spotify_client)
+):
     try:
         user_message = chat_request.message
         
@@ -248,8 +253,10 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
 
             # --- สั่งให้อัปเดตโปรไฟล์เบื้องหลัง (ย้ายมาทำก่อน) ---
             # เพื่อให้โปรไฟล์สดใหม่อยู่เสมอสำหรับการใช้งานครั้งถัดไป
-            if user_id:
-                background_tasks.add_task(update_user_profile_background, sp_client, user_id)
+            user_id = user_profile.get('id')
+            if user_id and sp_client.auth_manager.cache_handler.get_cached_token():
+                token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
+                background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
             # ------------------------------------
 
             logging.info("Executing intelligent recommendation path.")
@@ -369,3 +376,47 @@ async def chat_endpoint(chat_request: ChatRequest, background_tasks: BackgroundT
     except Exception as e:
         logging.critical(f"!!! An unhandled exception occurred in chat_endpoint: {e}")
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
+    
+# --- NEW ENDPOINT: To delete a pinned playlist ---
+@app.delete("/pinned_playlists/{pin_id}")
+async def delete_pinned_playlist_endpoint(pin_id: int, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        if not user_id:
+            raise HTTPException(status_code=404, detail="Could not find user.")
+        
+        from database import delete_pinned_playlist # Import locally to avoid circular dependency issues
+        
+        success = await delete_pinned_playlist(pin_id, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Playlist not found or you do not have permission to delete it.")
+            
+        return {"status": "success", "message": "Playlist deleted successfully."}
+    except Exception as e:
+        logging.error(f"ERROR deleting pinned playlist: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- NEW ENDPOINT: To update (rename or change songs) a pinned playlist ---
+@app.put("/pinned_playlists/{pin_id}")
+async def update_pinned_playlist_endpoint(pin_id: int, req: UpdatePlaylistRequest, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        if not user_id:
+            raise HTTPException(status_code=404, detail="Could not find user.")
+        
+        from database import update_pinned_playlist # Import locally
+        import json
+
+        songs_as_json_string = json.dumps(req.songs, ensure_ascii=False)
+        
+        success = await update_pinned_playlist(pin_id, user_id, req.playlist_name, songs_as_json_string)
+        if not success:
+            raise HTTPException(status_code=404, detail="Playlist not found or you do not have permission to edit it.")
+
+        return {"status": "success", "message": "Playlist updated successfully."}
+    except Exception as e:
+        logging.error(f"ERROR updating pinned playlist: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

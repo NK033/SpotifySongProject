@@ -77,7 +77,7 @@ async def create_spotify_playlist(sp_client: spotipy.Spotify, playlist_name: str
             await asyncio.to_thread(sp_client.playlist_add_items, playlist_id=playlist['id'], items=chunk)
     return playlist
 
-async def get_user_top_tracks(sp_client: spotipy.Spotify, limit: int = 20) -> list[dict]:
+async def get_user_top_tracks(sp_client: spotipy.Spotify, limit: int = 5) -> list[dict]:
     results = await asyncio.to_thread(sp_client.current_user_top_tracks, limit=int(limit), time_range='long_term')
     return results['items']
 
@@ -94,16 +94,6 @@ async def get_user_saved_tracks_uris(sp_client: spotipy.Spotify) -> set[str]:
             results = None
     return saved_tracks_uris
 
-async def get_audio_features_for_tracks(sp_client: spotipy.Spotify, track_ids: list[str]) -> list[dict]:
-    if not track_ids: 
-        return []
-    features_list = []
-    for i in range(0, len(track_ids), 100):
-        batch = track_ids[i:i+100]
-        # ✅ ใช้ positional argument แทน keyword เพื่อให้ Spotipy ส่ง token ถูกต้อง
-        features = await asyncio.to_thread(sp_client.audio_features, batch)
-        features_list.extend(features)
-    return [f for f in features_list if f]
 
 async def get_spotify_recommendations_for_discovery(sp_client: spotipy.Spotify, seed_genres: list[str]) -> list[dict]:
     if not seed_genres:
@@ -239,13 +229,13 @@ async def get_personalized_recommendations(sp_client: spotipy.Spotify, taste_pro
         print(f"  -> Error during personalized recommendation: {e}")
         return []
     
-async def get_user_recently_played_tracks(sp_client: spotipy.Spotify, limit: int = 15) -> list[dict]:
+async def get_user_recently_played_tracks(sp_client: spotipy.Spotify, limit: int = 12) -> list[dict]:
     """ดึงข้อมูลเพลงที่ผู้ใช้ฟังล่าสุด (Recently Played)"""
     results = await asyncio.to_thread(sp_client.current_user_recently_played, limit=limit)
     # API จะ trả về list ที่มี track object ซ้อนอยู่ข้างใน เราจึงต้องดึงออกมา
     return [item['track'] for item in results['items'] if item and item.get('track')]
 
-async def get_user_saved_tracks(sp_client: spotipy.Spotify, limit: int = 10) -> list[dict]:
+async def get_user_saved_tracks(sp_client: spotipy.Spotify, limit: int = 8) -> list[dict]:
     """
     (เวอร์ชันใหม่) ดึงข้อมูลเพลงที่ผู้ใช้กดไลค์ (Saved Tracks) โดยการสุ่ม
     """

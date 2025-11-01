@@ -262,36 +262,57 @@
 
         // (ใหม่) จัดการเมื่อผู้ใช้กดปุ่ม Pin Playlist
         async function handlePinClick(event) {
-            const pinButton = event.target.closest('.pin-playlist-btn');
-            if (!pinButton) return;
+        const pinButton = event.target.closest('.pin-playlist-btn');
+        if (!pinButton) return;
 
-            const accessToken = localStorage.getItem('spotify_access_token');
-            if (!accessToken) {
-                alert('กรุณาเข้าสู่ระบบ Spotify ก่อน Pin เพลย์ลิสต์ครับ');
-                return;
-            }
-
-            try {
-                const songs = JSON.parse(decodeURIComponent(pinButton.dataset.songs));
-                const recText = decodeURIComponent(pinButton.dataset.recText);
-                const playlistName = `AI Playlist - ${new Date().toLocaleTimeString('th-TH')}`;
-
-                const response = await fetch('/pin_playlist', {
-                    method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: JSON.stringify({ playlist_name: playlistName, songs: songs, recommendation_text: recText })
-                });
-
-                if (!response.ok) throw new Error('Failed to pin playlist');
-
-                await fetchAndRenderPinnedPlaylists();
-                pinButton.textContent = 'Pinned!';
-                pinButton.disabled = true;
-            } catch (error) {
-                console.error("Pinning Error:", error);
-                alert('เกิดข้อผิดพลาดในการ Pin เพลย์ลิสต์');
-            }
+        const accessToken = localStorage.getItem('spotify_access_token');
+        if (!accessToken) {
+            alert('กรุณาเข้าสู่ระบบ Spotify ก่อน Pin เพลย์ลิสต์ครับ');
+            return;
         }
+
+        try {
+            const songs = JSON.parse(decodeURIComponent(pinButton.dataset.songs));
+            const recText = decodeURIComponent(pinButton.dataset.recText);
+            const playlistName = `AI Playlist - ${new Date().toLocaleTimeString('th-TH')}`;
+
+            // --- THIS IS THE FIX ---
+            // Create a new, simplified list of song objects for storage.
+            // This removes any complex or non-serializable data types.
+            const simplifiedSongs = songs.map(song => ({
+                uri: song.uri,
+                name: song.name,
+                artists: song.artists.map(a => ({ name: a.name })),
+                album: {
+                    images: song.album.images
+                },
+                external_urls: {
+                    spotify: song.external_urls.spotify
+                }
+            }));
+            // ---------------------
+
+            const response = await fetch('/pin_playlist', {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                // Send the simplified song list instead of the original one
+                body: JSON.stringify({
+                    playlist_name: playlistName,
+                    songs: simplifiedSongs, // <-- Use the clean data
+                    recommendation_text: recText
+                })
+            });
+
+            if (!response.ok) throw new Error('Failed to pin playlist');
+
+            await fetchAndRenderPinnedPlaylists();
+            pinButton.textContent = 'Pinned!';
+            pinButton.disabled = true;
+        } catch (error) {
+            console.error("Pinning Error:", error);
+            alert('เกิดข้อผิดพลาดในการ Pin เพลย์ลิสต์');
+        }
+    }
 
         // (อัปเกรด) แสดงเพลย์ลิสต์ที่เลือกจากประวัติ
         function displayPlaylistFromHistory(historyIndex) {

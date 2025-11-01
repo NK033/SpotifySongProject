@@ -1,0 +1,50 @@
+/*
+  This file contains only your custom CSS.
+  The Tailwind directives (@tailwind base, etc.) are removed
+  because the CDN script in index.html handles them.
+*/
+
+body {
+  font-family: 'Sarabun', sans-serif;
+}
+
+.dark-theme {
+  --bg-primary: #0d1117;
+  --bg-secondary: #1a202c;
+  --text-primary: #e2e8f0;
+  --border-color: #2d3748;
+  --chat-bubble-ai: #2d3748;
+}
+
+.light-theme {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f3f4f6;
+  --text-primary: #1f2937;
+  --border-color: #d1d5db;
+  --chat-bubble-ai: #e5e7eb;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.song-item-card {
+  border-color: var(--border-color);
+}
+
+.dark-theme .song-item-card {
+  background-color: #1a202c;
+}
+
+.light-theme .song-item-card {
+  background-color: #f9fafb;
+}
+
+.modal-overlay {
+  transition: opacity 0.3s ease;
+}
+
+.modal-content {
+  transition: transform 0.3s ease;
+}

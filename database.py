@@ -4,12 +4,14 @@ import asyncio
 import os
 import json
 
-DATABASE_FILE = "song_analyses.db"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE_FILE = os.path.join(APP_DIR, "song_analyses.db")
 
 def get_db_connection():
     """
     สร้างและคืนค่าการเชื่อมต่อฐานข้อมูล SQLite
     """
+    # This now connects to the absolute path
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row
     return conn
@@ -348,6 +350,42 @@ async def get_pinned_playlists_by_user(user_id: str) -> list:
                     "timestamp": row['timestamp']
                 })
             return playlists
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)
+
+async def delete_pinned_playlist(pin_id: int, user_id: str):
+    """Deletes a specific pinned playlist belonging to a user."""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            # The WHERE clause ensures a user can only delete their own playlists
+            cursor.execute(
+                "DELETE FROM pinned_playlists WHERE id = ? AND user_id = ?",
+                (pin_id, user_id)
+            )
+            conn.commit()
+            # rowcount will be 1 if a row was deleted, 0 otherwise
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)
+
+async def update_pinned_playlist(pin_id: int, user_id: str, new_name: str, new_songs_json: str):
+    """Updates a pinned playlist's name and song list."""
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE pinned_playlists 
+                   SET playlist_name = ?, songs_json = ?, timestamp = CURRENT_TIMESTAMP
+                   WHERE id = ? AND user_id = ?""",
+                (new_name, new_songs_json, pin_id, user_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)
