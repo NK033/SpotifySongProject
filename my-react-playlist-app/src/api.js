@@ -141,3 +141,41 @@ export const createSpotifyPlaylist = async (playlistName, trackUris) => {
     }
     return response.json();
 };
+
+// --- NEW FUNCTION ---
+/**
+ * Sends a request to delete a pinned playlist.
+ * @param {number} pinId - The ID of the pinned playlist.
+ */
+export const deletePinnedPlaylist = async (pinId) => {
+  const response = await fetch(`/pinned_playlists/${pinId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to delete pinned playlist');
+  }
+  return { success: true };
+};
+
+// --- NEW FUNCTION ---
+/**
+ * Sends a request to update a pinned playlist's name.
+ * @param {number} pinId - The ID of the pinned playlist.
+ * @param {string} newName - The new name for the playlist.
+ * @param {Array} songs - The *original* list of songs (needed by the backend).
+ */
+export const updatePinnedPlaylist = async (pinId, newName, songs) => {
+  const response = await fetch(`/pinned_playlists/${pinId}`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      playlist_name: newName,
+      songs: songs // Send the original songs list back
+    })
+  });
+  if (!response.ok) {
+    throw new Error('Failed to update playlist');
+  }
+  return { success: true };
+};

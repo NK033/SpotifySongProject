@@ -25,7 +25,9 @@ function App() {
     handleShowDetails,
     handleFeedback,
     handlePinClick,
-    displayPlaylistFromHistory
+    displayPlaylistFromHistory,
+    handleDeletePinnedPlaylist, // <-- Get new function from context
+    handleUpdatePlaylistName   // <-- Get new function from context
   } = useAppContext();
 
   return (
@@ -38,6 +40,8 @@ function App() {
         onLogout={handleSpotifyLogout}
         pinnedPlaylists={pinnedPlaylists}
         onSelectPinned={displayPlaylistFromHistory}
+        onDeletePinned={handleDeletePinnedPlaylist} // <-- Pass prop to Sidebar
+        onUpdatePinned={handleUpdatePlaylistName}   // <-- Pass prop to Sidebar
         currentTheme={currentTheme}
         onToggleTheme={handleToggleTheme}
       />

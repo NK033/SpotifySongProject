@@ -126,6 +126,28 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  // --- NEW FUNCTION ---
+  const handleDeletePinnedPlaylist = async (pinId) => {
+    try {
+      await api.deletePinnedPlaylist(pinId);
+      await fetchAndRenderPinnedPlaylists(); // Refresh the list
+    } catch (error) {
+      console.error("Delete Pin Error:", error);
+      alert('เกิดข้อผิดพลาดในการลบเพลย์ลิสต์');
+    }
+  };
+
+  // --- NEW FUNCTION ---
+  const handleUpdatePlaylistName = async (pinId, newName, songs) => {
+    try {
+      await api.updatePinnedPlaylist(pinId, newName, songs);
+      await fetchAndRenderPinnedPlaylists(); // Refresh the list
+    } catch (error) {
+      console.error("Update Pin Error:", error);
+      alert('เกิดข้อผิดพลาดในการอัปเดตชื่อเพลย์ลิสต์');
+    }
+  };
+
   const fetchAndRenderPinnedPlaylists = async () => {
     try {
       const data = await api.fetchPinnedPlaylists();
@@ -135,8 +157,10 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  const displayPlaylistFromHistory = (historyIndex) => {
-    const historyItem = pinnedPlaylists[historyIndex];
+  // --- UPDATED FUNCTION ---
+  // Now finds by pin_id instead of index
+  const displayPlaylistFromHistory = (pinId) => {
+    const historyItem = pinnedPlaylists.find(p => p.pin_id === pinId);
     if (!historyItem) return;
     addMessageToHistory(historyItem.recommendationText, false, historyItem.songs, historyItem.recommendationText);
     setCurrentRecommendedSongs(historyItem.songs);
@@ -206,7 +230,9 @@ export const AppProvider = ({ children }) => {
     handleShowDetails,
     handleFeedback,
     handlePinClick,
-    displayPlaylistFromHistory
+    displayPlaylistFromHistory,
+    handleDeletePinnedPlaylist, // <-- ADD THIS
+    handleUpdatePlaylistName,  // <-- ADD THIS
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

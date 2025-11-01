@@ -7,9 +7,12 @@ from collections import Counter
 import numpy as np
 import random
 from spotify_api import create_spotify_client, get_fallback_recommendations
-from gemini_ai import rescue_lyrics_with_gemini,get_filler_tracks_with_lyrics
+from gemini_ai import rescue_lyrics_with_gemini, get_filler_tracks_with_lyrics
 # Import local modules
-from spotify_api import get_user_profile, get_user_top_tracks, get_user_recently_played_tracks, get_user_saved_tracks, search_spotify_songs, get_spotify_track_data
+from spotify_api import (
+    get_user_profile, get_user_top_tracks, get_user_recently_played_tracks, 
+    get_user_saved_tracks, search_spotify_songs, get_spotify_track_data
+)
 from lastfm_api import get_similar_tracks, get_chart_top_tracks, get_global_top_tracks, get_artist_top_tracks
 from genius_api import get_lyrics
 from custom_model import predict_moods
@@ -20,7 +23,6 @@ from database import (
 )
 from gemini_ai import get_gemini_seed_expansion
 
-# (ส่วน build_user_mood_profile, calculate_mood_score, analyze_and_cache_song เหมือนเดิม)
 async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> dict:
     """
     (Hybrid V7) สร้าง "พิมพ์เขียวอารมณ์ต้นแบบ" (Target Emotional Fingerprint)
@@ -53,8 +55,11 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> d
     
     # This loop is now updated to handle the new output
     for track in failed_tracks:
-        key = f"{track['name']} - {track['artists'][0]['name']}"
-        # ⭐ **NEW:** Check if lyrics were found AND are not an empty string
+        # Construct the key using the track name and artist name from the track object
+        artist_name = track.get('artists', [{}])[0].get('name', 'N/A')
+        track_name = track.get('name', 'N/A')
+        key = f"{artist_name} - {track_name}" # Correct key format
+        
         if key in rescued_lyrics_dict and rescued_lyrics_dict[key]:
             lyrics_found[track['uri']] = rescued_lyrics_dict[key]
 
@@ -103,17 +108,19 @@ async def analyze_and_cache_song_moods(spotify_track: dict) -> tuple[dict | None
         return cached_analysis['predicted_moods'], True
 
     # 2. Try the primary lyrics API (Genius)
-    lyrics = await get_lyrics(spotify_track['artists'][0]['name'], spotify_track['name'])
+    artist_name = spotify_track.get('artists', [{}])[0].get('name', 'N/A')
+    track_name = spotify_track.get('name', 'N/A')
+    lyrics = await get_lyrics(artist_name, track_name)
     
     # 3. ⭐ NEW: If the primary API fails, activate the Gemini rescue mission
     if not lyrics or len(lyrics) < 50:
-        logging.warning(f"Primary lyrics search failed for '{spotify_track['name']}'. Activating Gemini Rescue.")
+        logging.warning(f"Primary lyrics search failed for '{track_name}'. Activating Gemini Rescue.")
         
         # The rescue function expects a list, so we pass the single track in a list
         rescued_data = await rescue_lyrics_with_gemini([spotify_track])
         
         # Check if the rescue was successful
-        key = f"{spotify_track['name']} - {spotify_track['artists'][0]['name']}"
+        key = f"{artist_name} - {track_name}" # Use the same key format
         if key in rescued_data and rescued_data[key]:
             lyrics = rescued_data[key]
         else:
@@ -128,21 +135,6 @@ async def analyze_and_cache_song_moods(spotify_track: dict) -> tuple[dict | None
     # 5. If all attempts fail, return unsuccessful
     return None, False
 
-# --- (แก้ไข) เพิ่ม Helper Function ที่ขาดหายไป ---
-async def analyze_and_cache_song_moods(spotify_track: dict) -> tuple[dict | None, bool]:
-    if not spotify_track or 'uri' not in spotify_track:
-        return None, False
-    cached_analysis = await get_song_analysis_from_db(spotify_track['uri'])
-    if cached_analysis and 'predicted_moods' in cached_analysis:
-        return cached_analysis['predicted_moods'], True
-    lyrics = await get_lyrics(spotify_track['artists'][0]['name'], spotify_track['name'])
-    if lyrics and len(lyrics) > 50:
-        moods = predict_moods(lyrics)
-        await save_song_analysis_to_db(spotify_track, {"predicted_moods": moods})
-        return moods, True
-    return None, False
-
-
 def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
     if not profile1 or not profile2: return 0.0
     labels = sorted(list(profile1.keys()))
@@ -153,10 +145,6 @@ def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
     norm2 = np.linalg.norm(vec2)
     if norm1 == 0 or norm2 == 0: return 0.0
     return dot_product / (norm1 * norm2)
-
-
-
-# (นำโค้ดนี้ไปวางทับฟังก์ชัน get_intelligent_recommendations เดิมใน recommender.py)
 
 async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: str, user_mood_profile: dict | None) -> list[dict]:
     """
@@ -220,7 +208,11 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
         spotify_results = await search_spotify_songs(sp_client, query, limit=1)
         if not spotify_results: return
         spotify_track = spotify_results[0]
-        moods, success = await analyze_and_cache_song_moods(spotify_track)
+        
+        # --- THIS IS THE FIX ---
+        # It now calls the robust function that includes the Gemini rescue logic
+        moods, success = await analyze_and_cache_song_moods(spotify_track) 
+        
         if success and moods:
             analysis_results[spotify_track['uri']] = {"track_object": spotify_track, "moods": moods}
 
@@ -316,27 +308,6 @@ async def get_intelligent_recommendations(sp_client: spotipy.Spotify, user_id: s
 async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
     """
     รวบรวมเพลงเมล็ดพันธุ์จาก Top Tracks, Saved Tracks, และ Recently Played
-    ด้วยสัดส่วนที่กำหนดเอง (Top 20%, Saved 30%, Recent 50%)
-    """
-    tasks = [
-        get_user_top_tracks(sp_client, limit=5),      # <-- Changed from 10 to 5 (20%)
-        get_user_saved_tracks(sp_client, limit=8),    # <-- Changed from 10 to 8 (30%)
-        get_user_recently_played_tracks(sp_client, limit=12) # <-- Changed from 5 to 12 (50%)
-    ]
-    results = await asyncio.gather(*tasks)
-    top_tracks, liked_tracks, recent_tracks = results
-
-    all_seed_tracks = {}
-    for track in top_tracks + liked_tracks + recent_tracks:
-        if track and track.get('uri') and track['uri'] not in all_seed_tracks:
-            all_seed_tracks[track['uri']] = track
-
-    return list(all_seed_tracks.values())
-
-
-async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
-    """
-    รวบรวมเพลงเมล็ดพันธุ์จาก Top Tracks, Saved Tracks, และ Recently Played
     """
     tasks = [
         get_user_top_tracks(sp_client, limit=10),
@@ -382,5 +353,3 @@ async def update_user_profile_background(token_info: dict, user_id: str):
 
     except Exception as e:
         logging.error(f"BACKGROUND TASK: An error occurred for user {user_id}: {e}", exc_info=True)
-# ---------------------
-

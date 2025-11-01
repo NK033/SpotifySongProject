@@ -154,79 +154,93 @@ async def get_gemini_seed_expansion(top_tracks: list[dict]) -> list[dict]:
 
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     """
-    (V3 - Robust) Finds lyrics using detailed metadata and safe-key mapping
-    to prevent API response errors.
+    (V4 - Rate Limit Proof) Finds lyrics in safe batches to prevent 429 errors.
     """
-    if not failed_tracks: return {}
-    logging.info(f"--- Activating Gemini Lyric Finder (Robust V3) for {len(failed_tracks)} tracks... ---")
-
-    # Step 1: Create a list of tracks with safe IDs and a map to convert them back
-    tracks_for_prompt = []
-    id_to_key_map = {}  # e.g., {"track_1": "Artist Name - Song Name"}
-    
-    for i, track in enumerate(failed_tracks):
-        artist = track.get('artists', [{}])[0].get('name', 'N/A')
-        title = track.get('name', 'N/A')
-        
-        track_key = f"{artist} - {title}"  # The final key we want
-        track_id = f"track_{i+1}"          # The safe key for the API
-        
-        id_to_key_map[track_id] = track_key
-        
-        tracks_for_prompt.append({
-            "id": track_id,  # Give the API the safe key
-            "artist": artist,
-            "track": title,
-            "album": track.get('album', {}).get('name'),
-            "release_year": track.get('album', {}).get('release_date', '----')[:4],
-            "spotify_url": track.get('external_urls', {}).get('spotify')
-        })
-
-    # Step 2: Create a simpler, more robust prompt using the safe IDs
-    prompt = f"""
-    You are an expert, multilingual lyric search engine. Find the full, accurate lyrics for the songs in this JSON: {json.dumps(tracks_for_prompt, ensure_ascii=False)}.
-
-    **Response Format Requirement (Crucial):**
-    - You MUST respond with a perfectly structured JSON object.
-    - The key for each entry must be the "id" from the input (e.g., "track_1", "track_2").
-    - The value must be a single string containing the full lyrics, or "" if not found.
-    - Do NOT summarize or translate.
-    
-    **Example Response:**
-    {{
-      "track_1": "Full lyrics for the first song...",
-      "track_2": "ここに歌詞が入ります...",
-      "track_3": ""
-    }}
-    """
-    
-    try:
-        response = await JSON_MODEL.generate_content_async(prompt)
-        api_response_data = json.loads(response.text)
-
-        # Step 3: Check the response and map the IDs back to the "artist - track" keys
-        if isinstance(api_response_data, dict):
-            # This is the expected behavior
-            
-            # Create the final dictionary using the map
-            rescued_data = {}
-            for track_id, lyrics in api_response_data.items():
-                if track_id in id_to_key_map:
-                    artist_track_key = id_to_key_map[track_id]
-                    rescued_data[artist_track_key] = lyrics
-            
-            found_count = sum(1 for lyric in rescued_data.values() if lyric)
-            logging.info(f"✅ Gemini Lyric Finder retrieved lyrics for {found_count}/{len(failed_tracks)} tracks.")
-            return rescued_data
-        else:
-            # This handles the case where the API *still* returns a list
-            logging.error(f"❌ Gemini Lyric Finder API did not return a dictionary. Got {type(api_response_data)} instead.")
-            return {} 
-
-    except Exception as e:
-        # This catches other errors, like the 500 error from before
-        logging.error(f"❌ Error during Gemini Lyric Finder mission: {e}", exc_info=True)
+    if not failed_tracks: 
         return {}
+        
+    logging.info(f"--- Activating Gemini Lyric Finder (Rate-Limit Proof V4) for {len(failed_tracks)} tracks... ---")
+
+    # --- THIS IS THE FIX ---
+    # Define a safe batch size and a delay
+    BATCH_SIZE = 5  # 5 requests per prompt is very safe
+    DELAY_BETWEEN_BATCHES = 5  # 5 seconds delay
+    
+    all_rescued_data = {}
+    
+    # Process the failed tracks in small, safe batches
+    for i in range(0, len(failed_tracks), BATCH_SIZE):
+        batch_tracks = failed_tracks[i:i + BATCH_SIZE]
+        logging.info(f"--- Processing batch {i//BATCH_SIZE + 1}/{len(failed_tracks)//BATCH_SIZE + 1} ---")
+
+        # Step 1: Create a list of tracks with safe IDs and a map
+        tracks_for_prompt = []
+        id_to_key_map = {}
+        
+        for j, track in enumerate(batch_tracks):
+            artist = track.get('artists', [{}])[0].get('name', 'N/A')
+            title = track.get('name', 'N/A')
+            track_key = f"{artist} - {title}"
+            track_id = f"track_{j+1}"
+            
+            id_to_key_map[track_id] = track_key
+            
+            tracks_for_prompt.append({
+                "id": track_id,
+                "artist": artist,
+                "track": title,
+                "album": track.get('album', {}).get('name'),
+                "release_year": track.get('album', {}).get('release_date', '----')[:4],
+                "spotify_url": track.get('external_urls', {}).get('spotify')
+            })
+
+        # Step 2: Create the prompt for this batch
+        prompt = f"""
+        You are an expert, multilingual lyric search engine. Find the full, accurate lyrics for the songs in this JSON: {json.dumps(tracks_for_prompt, ensure_ascii=False)}.
+
+        **Response Format Requirement (Crucial):**
+        - You MUST respond with a perfectly structured JSON object.
+        - The key for each entry must be the "id" from the input (e.g., "track_1", "track_2").
+        - The value must be a single string containing the full lyrics, or "" if not found.
+        - Do NOT summarize or translate.
+        
+        **Example Response:**
+        {{
+          "track_1": "Full lyrics for the first song...",
+          "track_2": ""
+        }}
+        """
+        
+        try:
+            # Step 3: Call the API for this batch
+            response = await JSON_MODEL.generate_content_async(prompt)
+            api_response_data = json.loads(response.text)
+
+            # Step 4: Map the results back
+            if isinstance(api_response_data, dict):
+                for track_id, lyrics in api_response_data.items():
+                    if track_id in id_to_key_map:
+                        artist_track_key = id_to_key_map[track_id]
+                        all_rescued_data[artist_track_key] = lyrics
+            else:
+                logging.error(f"❌ Gemini API returned a {type(api_response_data)} instead of a dict for this batch.")
+
+        except Exception as e:
+            logging.error(f"❌ Error during Gemini Lyric Finder batch: {e}", exc_info=True)
+            # If one batch fails, log it and continue to the next
+            pass 
+
+        # Step 5: Wait before processing the next batch to avoid rate limits
+        if i + BATCH_SIZE < len(failed_tracks):
+            logging.info(f"--- Waiting {DELAY_BETWEEN_BATCHES}s before next batch... ---")
+            await asyncio.sleep(DELAY_BETWEEN_BATCHES)
+
+    # --- End of batch processing ---
+    
+    found_count = sum(1 for lyric in all_rescued_data.values() if lyric)
+    logging.info(f"✅ Gemini Lyric Finder (V4) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
+    return all_rescued_data
+
 
 async def get_filler_tracks_with_lyrics(existing_tracks: list[dict]) -> list[dict]:
     """

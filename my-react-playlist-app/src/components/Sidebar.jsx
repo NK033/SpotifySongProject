@@ -8,9 +8,27 @@ function Sidebar({
   onLogout,
   pinnedPlaylists,
   onSelectPinned,
+  onDeletePinned,   // <-- Prop ที่รับเข้ามาสำหรับลบ
+  onUpdatePinned,   // <-- Prop ที่รับเข้ามาสำหรับแก้ไข
   currentTheme,
   onToggleTheme
 }) {
+  
+  const handleRename = (e, item) => {
+    e.stopPropagation(); // กันไม่ให้ปุ่ม "เลือก" ทำงาน
+    const newName = prompt(`ป้อนชื่อใหม่สำหรับ: "${item.name}"`, item.name);
+    if (newName && newName.trim() !== item.name) {
+      onUpdatePinned(item.pin_id, newName.trim(), item.songs);
+    }
+  };
+
+  const handleDelete = (e, item) => {
+    e.stopPropagation(); // กันไม่ให้ปุ่ม "เลือก" ทำงาน
+    if (confirm(`คุณแน่ใจหรือไม่ว่าต้องการลบเพลย์ลิสต์ "${item.name}"?`)) {
+      onDeletePinned(item.pin_id);
+    }
+  };
+
   return (
     <>
       <div
@@ -44,14 +62,45 @@ function Sidebar({
           </div>
           <div className="flex-grow p-2 overflow-y-auto mt-4 border-t border-[var(--border-color)]">
             <h3 className="text-sm font-semibold text-gray-400 mb-2 px-2 pt-2">ประวัติเพลย์ลิสต์ที่ Pin ไว้</h3>
+            
+            {/* --- MODIFIED SECTION --- */}
             <div className="space-y-1">
-              {pinnedPlaylists.map((item, index) => (
-                <button key={index} onClick={() => onSelectPinned(index)} className="w-full text-left text-sm p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-300">
-                  <div className="font-medium">{item.name}</div>
-                  <div className="text-xs text-gray-400">Pinned on: {new Date(item.timestamp).toLocaleDateString('th-TH')}</div>
-                </button>
+              {pinnedPlaylists.map((item) => (
+                <div 
+                  key={item.pin_id} // Use the unique pin_id
+                  // ลบคลาส 'group' ออก
+                  className="w-full flex items-center justify-between text-left text-sm p-2 rounded-lg hover:bg-gray-700 transition-colors text-gray-300"
+                >
+                  <button 
+                    onClick={() => onSelectPinned(item.pin_id)} // Pass pin_id
+                    className="flex-grow text-left overflow-hidden"
+                  >
+                    <div className="font-medium truncate">{item.name}</div>
+                    <div className="text-xs text-gray-400">
+                      {new Date(item.timestamp).toLocaleDateString('th-TH')}
+                    </div>
+                  </button>
+                  
+                  {/* Edit Button - ลบ "opacity-0 group-hover:opacity-100" ออก */}
+                  <button 
+                    onClick={(e) => handleRename(e, item)}
+                    className="flex-shrink-0 p-1 ml-1 rounded-full text-gray-500 hover:text-blue-400 hover:bg-gray-600 transition-opacity"
+                  >
+                    <i className="fas fa-pencil-alt fa-xs"></i>
+                  </button>
+
+                  {/* Delete Button - ลบ "opacity-0 group-hover:opacity-100" ออก */}
+                  <button 
+                    onClick={(e) => handleDelete(e, item)}
+                    className="flex-shrink-0 p-1 ml-1 rounded-full text-gray-500 hover:text-red-500 hover:bg-gray-600 transition-opacity"
+                  >
+                    <i className="fas fa-trash-alt fa-xs"></i>
+                  </button>
+                </div>
               ))}
             </div>
+            {/* --- END MODIFIED SECTION --- */}
+
           </div>
           <div className="mt-auto pt-4 border-t border-[var(--border-color)]">
             <button
