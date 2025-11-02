@@ -233,39 +233,68 @@ def calculate_mood_score(song_moods: list, user_profile: dict) -> float:
         
     return score / len(song_moods) if song_moods else 0.0
 
-async def analyze_and_cache_song_moods(spotify_track: dict) -> tuple[dict | None, bool]:
+async def analyze_and_cache_song_moods(
+    spotify_track: dict, 
+    lang_hint: str | None = None  # <-- (ใหม่) รับ "คำใบ้" ด้านภาษา
+) -> tuple[dict | None, bool]:
     """
-    (V2 - With Rescue) If the primary API fails to find lyrics, this function will now
-    call the Gemini rescue mission for a second attempt.
+    (V4 - Genre-Aware Smart Strategy)
+    Dynamically chooses the best lyric provider based on the genre-derived lang_hint.
     """
     if not spotify_track or 'uri' not in spotify_track:
         return None, False
 
+    # 1. ตรวจสอบ Cache ก่อน (เหมือนเดิม)
     cached_analysis = await get_song_analysis_from_db(spotify_track['uri'])
     if cached_analysis and 'predicted_moods' in cached_analysis:
         return cached_analysis['predicted_moods'], True
 
     artist_name = spotify_track.get('artists', [{}])[0].get('name', 'N/A')
     track_name = spotify_track.get('name', 'N/A')
-    lyrics = await get_lyrics(artist_name, track_name)
     
-    if not lyrics or len(lyrics) < 50:
-        logging.warning(f"Primary lyrics search failed for '{track_name}'. Activating Gemini Rescue.")
+    lyrics = None
+
+    # --- (*** ใหม่: ตรรกะ V4 Smart Strategy ***) ---
+    
+    # 2. ใช้ "คำใบ้" (lang_hint) ที่ได้มาจาก Genre เพื่อเลือกแผน
+    # (ถ้าไม่มีคำใบ้ ให้ default เป็น 'latin' -> Genius first)
+    strategy = lang_hint if lang_hint else 'latin' 
+
+    if strategy == 'latin':
+        # Strategy 1: Latin (เพลงสากล) -> Genius ก่อน เพื่อความแม่นยำ
+        logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Genius (Plan A)...")
+        lyrics = await get_lyrics(artist_name, track_name)
         
+        if not lyrics or len(lyrics) < 50:
+            # Fallback (Plan B): ถ้า Genius เฟล, ค่อยเรียก Gemini
+            logging.warning(f"Genius failed for '{track_name}'. Trying Gemini (Plan B)...")
+            rescued_data = await rescue_lyrics_with_gemini([spotify_track])
+            key = f"{artist_name} - {track_name}"
+            if key in rescued_data and rescued_data[key]:
+                lyrics = rescued_data[key]
+    else:
+        # Strategy 2: CJK, Thai (เพลงเอเชีย) -> Gemini ก่อน เพื่อโอกาสหาเจอ
+        logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Gemini (Plan A)...")
         rescued_data = await rescue_lyrics_with_gemini([spotify_track])
-        
         key = f"{artist_name} - {track_name}"
+        
         if key in rescued_data and rescued_data[key]:
             lyrics = rescued_data[key]
         else:
-            lyrics = None
+            # Fallback (Plan B): ถ้า Gemini เฟล, ค่อยลอง Genius (เผื่อฟลุค)
+            logging.warning(f"Gemini failed for '{track_name}'. Trying Genius (Plan B)...")
+            lyrics = await get_lyrics(artist_name, track_name)
+    # --- (*** จบตรรกะ V4 ***) ---
 
+    # 3. ประมวลผลเนื้อเพลงที่หามาได้ (เหมือนเดิม)
     if lyrics and len(lyrics) > 50:
         moods = predict_moods(lyrics)
         if moods:
             await save_song_analysis_to_db(spotify_track, {"predicted_moods": moods})
             return moods, True
     
+    # 4. ถ้าล้มเหลวทั้งหมด
+    logging.warning(f"All lyric strategies failed for '{track_name}'.")
     return None, False
 
 def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
@@ -284,12 +313,12 @@ def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
 async def get_intelligent_recommendations(
     sp_client: spotipy.Spotify, 
     user_id: str, 
-    stylistic_profile: dict,  # (โปรไฟล์ประวัติ/สไตล์)
-    emotional_profile: dict,  # (โปรไฟล์อารมณ์ตามคำขอ)
-    user_message: str         # <-- (*** เพิ่มพารามิเตอร์นี้ ***)
+    stylistic_profile: dict,
+    emotional_profile: dict,
+    user_message: str
 ) -> list[dict]:
     """
-    (Hybrid V13.4: Emotion-Aware Candidate Generation)
+    (Hybrid V13.4 + V4 Lyric Strategy)
     """
     MINIMUM_PLAYLIST_SIZE = 10
     STRICT_SCORE_THRESHOLD = 0.45 
@@ -310,25 +339,19 @@ async def get_intelligent_recommendations(
     disliked_uris = feedback_data.get('dislikes', set())
     blacklist_uris = existing_uris.union(history_uris).union(disliked_uris)
 
-    # --- (*** แก้ไข: Part 2: Candidate Generation ***) ---
+    # --- Part 2: Candidate Generation (เหมือนเดิม) ---
     candidate_tracks_info = []
     MIN_CANDIDATES = 30
-
     logging.info("Cascade Strategy 1: Attempting Gemini Seed Expansion (Emotion-Aware)...")
-    # (*** ส่ง user_message เข้าไป ***)
     gemini_candidates = await get_gemini_seed_expansion(top_tracks_list, user_message) 
-    
     if gemini_candidates: 
         candidate_tracks_info.extend(gemini_candidates)
-
-    # (Last.fm ยังคง "ตาบอด" ซึ่งไม่เป็นไร เพราะเรามี Gemini เป็นตัวหลักแล้ว)
     if len(candidate_tracks_info) < MIN_CANDIDATES:
         logging.info("Cascade Strategy 2: Attempting Last.fm similar tracks...")
         try:
             lastfm_similar = await get_similar_tracks(top_tracks_list[0]['artists'][0]['name'], top_tracks_list[0]['name'], limit=30)
             if lastfm_similar: candidate_tracks_info.extend(lastfm_similar)
         except Exception as e: logging.error(f"Last.fm similar tracks failed: {e}")
-    
     if len(candidate_tracks_info) < MIN_CANDIDATES:
         logging.info("Cascade Strategy 3: Attempting Last.fm artist top tracks...")
         try:
@@ -336,15 +359,12 @@ async def get_intelligent_recommendations(
             lastfm_artist_top = await get_artist_top_tracks(top_artist_name, limit=20)
             if lastfm_artist_top: candidate_tracks_info.extend(lastfm_artist_top)
         except Exception as e: logging.error(f"Last.fm artist top tracks failed: {e}")
-        
     if len(candidate_tracks_info) < MIN_CANDIDATES:
         logging.info("Cascade Strategy 4: Attempting Last.fm Global Top Tracks...")
         try:
             lastfm_global_top = await get_global_top_tracks(limit=30)
             if lastfm_global_top: candidate_tracks_info.extend(lastfm_global_top)
         except Exception as e: logging.error(f"Last.fm global top tracks failed: {e}")
-    
-    # ... (ส่วน Deduplication เหมือนเดิม) ...
     if not candidate_tracks_info:
         logging.error("All candidate generation plans failed. Using Spotify's direct fallback.")
         return await get_fallback_recommendations(sp_client)
@@ -361,11 +381,11 @@ async def get_intelligent_recommendations(
         logging.info(f"  {i+1}. '{track.get('title')}' by {track.get('artist')}")
     # --- (จบ Part 2) ---
 
-
-    # --- Part 3: Parallel Lyric Analysis (เหมือนเดิม) ---
-    # (หมายเหตุ: เรายังไม่แก้ปัญหา "คอขวด" ของ genius_api.py ในขั้นตอนนี้)
+    
+    # --- (*** แก้ไข: Part 3: Parallel Lyric Analysis ***) ---
     analysis_results = {}
     sem = asyncio.Semaphore(8)
+
     async def _analyze_single_track(track_info):
         await sem.acquire()
         try:
@@ -373,42 +393,64 @@ async def get_intelligent_recommendations(
             spotify_results = await search_spotify_songs(sp_client, query, limit=1)
             if not spotify_results: return
             spotify_track = spotify_results[0]
-            if guardrail_language:
-                track_name, artist = spotify_track.get('name', ''), spotify_track.get('artists', [{}])[0]
-                artist_id, artist_name = artist.get('id'), artist.get('name', '')
-                lang = None
-                if artist_id:
-                    try:
-                        artist_details = await asyncio.to_thread(sp_client.artist, artist_id=artist_id)
-                        if artist_details: lang = _classify_lang_from_genres(artist_details.get('genres', []))
-                    except Exception: pass
-                if lang is None:
-                    lang = _detect_language_from_string(track_name, artist_name)
-                if lang != guardrail_language:
-                    logging.warning(f"GUARDRAIL: Filtering out '{track_name}' (Lang: {lang}) - does not match user profile ({guardrail_language}).")
-                    return
+            
+            # 1. คำนวณ "ภาษา" ที่แท้จริง (จาก Genre)
+            lang = None
+            track_name, artist = spotify_track.get('name', ''), spotify_track.get('artists', [{}])[0]
+            artist_id, artist_name = artist.get('id'), artist.get('name', '')
+            
+            if artist_id:
+                try:
+                    # เรียก Spotify API เพื่อเอา Genre (เช่น 'j-pop')
+                    artist_details = await asyncio.to_thread(sp_client.artist, artist_id=artist_id)
+                    if artist_details: 
+                        lang = _classify_lang_from_genres(artist_details.get('genres', []))
+                except Exception: 
+                    pass # (ถ้า error ก็ปล่อยไป)
+            
+            # ถ้าหา Genre ไม่เจอ, ค่อยใช้การเดาจากตัวอักษร
+            if lang is None:
+                lang = _detect_language_from_string(track_name, artist_name)
+            
+            # 2. ตรวจสอบ Guardrail (เหมือนเดิม)
+            if guardrail_language and lang != guardrail_language:
+                logging.warning(f"GUARDRAIL: Filtering out '{track_name}' (Lang: {lang}) - does not match user profile ({guardrail_language}).")
+                return
+            
+            # 3. ตรวจสอบ Blacklist (เหมือนเดิม)
             if spotify_track['uri'] in blacklist_uris:
                 return
-            moods, success = await analyze_and_cache_song_moods(spotify_track) 
-            if success and moods:
+            
+            # 4. เรียกใช้ฟังก์ชันวิเคราะห์ โดยส่ง "คำใบ้" (lang) ที่เราเพิ่งหามาได้
+            moods_tuple = await analyze_and_cache_song_moods(spotify_track, lang_hint=lang) 
+            
+            moods = moods_tuple[0] # (ดึงเฉพาะ dict ออกมา)
+            
+            if moods:
                 analysis_results[spotify_track['uri']] = {"track_object": spotify_track, "moods": moods}
+                
         except Exception as e:
             logging.error(f"Error analyzing track '{track_info.get('title')}': {e}", exc_info=False)
         finally:
             sem.release()
+
     analysis_tasks = [_analyze_single_track(info) for info in candidate_tracks_info]
     await asyncio.gather(*analysis_tasks)
     logging.info(f"Completed parallel analysis. Found lyrics for {len(analysis_results)} tracks.")
     # --- (จบ Part 3) ---
 
-    # --- Part 4: Scoring Helpers (เหมือนเดิม) ---
+    
+    # --- (*** แก้ไข: Part 4: Scoring Helpers ***) ---
     disliked_fingerprints = []
     for uri in disliked_uris:
         track_info = await get_spotify_track_data(sp_client, uri)
         if track_info:
-            song_fingerprint, success = await analyze_and_cache_song_moods(track_info)
+            # (แก้) ส่ง lang_hint=None เพราะเราไม่รู้ภาษาล่วงหน้าสำหรับเพลงที่ dislike
+            # (หรือไม่จำเป็นต้องคำนวณใหม่ เพราะมันซับซ้อนเกินไปสำหรับ dislike)
+            song_fingerprint, success = await analyze_and_cache_song_moods(track_info, lang_hint=None) 
             if success and song_fingerprint:
                 disliked_fingerprints.append(song_fingerprint)
+                
     total_years, track_count = 0, 0
     for track in user_seed_tracks:
         try:
@@ -418,7 +460,7 @@ async def get_intelligent_recommendations(
         except (ValueError, KeyError, IndexError, TypeError): continue
     average_year = total_years / track_count if track_count > 0 else None
 
-    # --- Part 4.5: Two-Vector Scoring (เหมือนเดิม) ---
+    # --- (Part 4.5: Two-Vector Scoring - เหมือนเดิม) ---
     logging.info("--- 📈 Scoring All Analyzed Candidates (V5 Two-Vector) ---")
     all_scored_candidates = []
     if not analysis_results:
@@ -458,9 +500,8 @@ async def get_intelligent_recommendations(
     for i, track in enumerate(all_scored_candidates):
         score = track['ai_analysis']['mood_score']
         logging.info(f"  {i+1}. (Score: {score:.4f}) '{track['name']}' by {track['artists'][0]['name']}")
-    # --- (จบ Part 4.5) ---
 
-    # --- Part 5 & 6 (Filler Logic - เหมือนเดิม) ---
+    # --- (*** แก้ไข: Part 6: Filler Logic ***) ---
     logging.info(f"--- Starting Round 1: Strict Filtering (Threshold: {STRICT_SCORE_THRESHOLD}) ---")
     round_1_playlist = [
         track for track in all_scored_candidates 
@@ -495,20 +536,36 @@ async def get_intelligent_recommendations(
                     spotify_results = await search_spotify_songs(sp_client, query, limit=1)
                     if not spotify_results: return
                     spotify_track = spotify_results[0]
-                    if guardrail_language:
-                        track_name = spotify_track.get('name', '')
-                        artist_name = spotify_track.get('artists', [{}])[0].get('name', '')
-                        track_lang = _detect_language_from_string(track_name, artist_name)
-                        if track_lang != guardrail_language: return
+                    
+                    # (แก้) ต้องคำนวณ lang_hint สำหรับ Filler ด้วย
+                    filler_lang_hint = None
+                    filler_track_name = spotify_track.get('name', '')
+                    filler_artist = spotify_track.get('artists', [{}])[0]
+                    filler_artist_id = filler_artist.get('id')
+                    filler_artist_name = filler_artist.get('name', '')
+
+                    if filler_artist_id:
+                        try:
+                            f_artist_details = await asyncio.to_thread(sp_client.artist, artist_id=filler_artist_id)
+                            if f_artist_details: filler_lang_hint = _classify_lang_from_genres(f_artist_details.get('genres', []))
+                        except Exception: pass
+                    if filler_lang_hint is None:
+                        filler_lang_hint = _detect_language_from_string(filler_track_name, filler_artist_name)
+
+                    if guardrail_language and filler_lang_hint != guardrail_language: return
                     if spotify_track['uri'] in blacklist_uris: return
+                    
                     song_fingerprint = None
                     lyrics_summary = track_info.get("lyrics_summary")
                     if lyrics_summary:
                         song_fingerprint = predict_moods(lyrics_summary)
                     else:
-                        moods, success = await analyze_and_cache_song_moods(spotify_track)
-                        if success: song_fingerprint = moods
+                        # (แก้) ส่ง lang_hint ที่เพิ่งคำนวณไปให้
+                        moods_tuple = await analyze_and_cache_song_moods(spotify_track, lang_hint=filler_lang_hint)
+                        song_fingerprint = moods_tuple[0]
+                        
                     if not song_fingerprint: return
+                    
                     stylistic_score = calculate_cosine_similarity(stylistic_profile, song_fingerprint)
                     if has_target_emotion:
                         emotional_score = calculate_cosine_similarity(emotional_profile, song_fingerprint)
@@ -526,9 +583,8 @@ async def get_intelligent_recommendations(
             await asyncio.gather(filler_tasks)
             logging.info(f"Round 2: {len(round_2_songs)} songs passed loose filtering.")
             final_playlist.extend(round_2_songs)
-    # --- (จบ Part 5 & 6) ---
 
-    # --- Part 7: Finalizing (เหมือนเดิม) ---
+    # --- (Part 7: Finalizing - เหมือนเดิม) ---
     final_playlist.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
     final_playlist = final_playlist[:15]
     if final_playlist:

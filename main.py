@@ -5,7 +5,7 @@ import os
 import spotipy
 import google.generativeai as genai
 # (*** เพิ่ม 1: Import Tool และ FunctionCallable ***)
-from google.generativeai.types import Tool, FunctionDeclaration, Schema, Type
+from google.generativeai.types import Tool, FunctionDeclaration
 
 from fastapi import FastAPI, Header, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,7 +20,7 @@ from recommender import get_intelligent_recommendations, get_mood_profile_from_m
 from lastfm_api import get_chart_top_tracks
 from fastapi import BackgroundTasks
 from recommender import get_intelligent_recommendations, update_user_profile_background
-from gemini_ai import get_song_analysis_details, summarize_playlist
+from gemini_ai import get_song_analysis_details, summarize_playlist,get_emotional_profile_from_gemini,get_gemini_seed_expansion
 from pydantic import BaseModel
 from typing import List
 from database import get_user_mood_profile, init_db, save_user_feedback, add_pinned_playlist, get_pinned_playlists_by_user
@@ -226,6 +226,7 @@ async def summarize_playlist_endpoint(req: SummarizePlaylistRequest, sp_client: 
     
 # --- Main Chat Endpoint (เวอร์ชันสมบูรณ์) ---
 # (*** นี่คือฟังก์ชันที่แก้ไข ***)
+# --- (*** 2. แก้ไขฟังก์ชันนี้: ***) ---
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(
     chat_request: ChatRequest, 
@@ -254,7 +255,7 @@ async def chat_endpoint(
         # --- (จบ Intent Classification) ---
         
 
-        # --- (*** แก้ไข: PATH 1: Get Recommendations ***) ---
+        # --- (Path 1: Get Recommendations - เหมือนเดิม) ---
         if "get_recommendations" in intent:
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
@@ -262,17 +263,13 @@ async def chat_endpoint(
             user_profile = await get_user_profile(sp_client)
             user_id = user_profile.get('id')
 
-            # --- สั่งให้อัปเดตโปรไฟล์เบื้องหลัง (เหมือนเดิม) ---
             if user_id and sp_client.auth_manager.cache_handler.get_cached_token():
                 token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
                 background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
-            # ------------------------------------
 
-            logging.info("Executing intelligent recommendation path (V5 Two-Vector).")
+            logging.info("Executing intelligent recommendation path (V6 - Abstract Fallback).")
             
-            # --- 1. ดึงโปรไฟล์ประวัติ (Stylistic Profile) ---
             historical_profile = await get_user_mood_profile(user_id)
-
             if not historical_profile:
                 logging.warning(f"No cached profile for {user_id}. Building for the first time...")
                 from recommender import build_user_mood_profile
@@ -280,32 +277,46 @@ async def chat_endpoint(
                 if not historical_profile:
                      return ChatResponse(response="ขออภัยค่ะ ฉันยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อยนะคะ")
 
-            # --- 2. สร้างโปรไฟล์อารมณ์เป้าหมาย (Emotional Profile) ---
+            # --- (ตรรกะ "ล่าม" V6 - เหมือนเดิม) ---
             emotional_profile = await get_mood_profile_from_message(user_message)
+            is_highly_neutral = True
+            is_generic_request = False
+            if emotional_profile:
+                for mood, score in emotional_profile.items():
+                    if mood != 'neutral' and score > 0.3:
+                        is_highly_neutral = False
+                        break
+            generic_prompts = [
+                "🎵 แนะนำเพลงส่วนตัวให้หน่อย", 
+                "แนะนำเพลง", 
+                "เพลงแนะนำ", 
+                "ขอเพลงหน่อย", 
+                "หาเพลง"
+            ]
+            if user_message in generic_prompts:
+                is_generic_request = True
+            if is_highly_neutral and not is_generic_request:
+                logging.warning(f"'predict_moods' failed to understand '{user_message}'. Falling back to Gemini Translator.")
+                emotional_profile = await get_emotional_profile_from_gemini(user_message)
+            # --- (จบตรรกะ "ล่าม") ---
 
-            # --- 3. เรียก Recommender ด้วยโปรไฟล์ 2 แบบ และ user_message ---
             recommended_songs = await get_intelligent_recommendations(
                 sp_client, 
                 user_id, 
-                historical_profile,  # <-- โปรไฟล์สไตล์
-                emotional_profile,   # <-- โปรไฟล์อารมณ์
-                user_message         # <-- (*** เพิ่มพารามิเตอร์นี้ ***)
+                historical_profile,
+                emotional_profile,
+                user_message
             )
-            # --- (*** จบส่วนแก้ไข ***) ---
 
             if not recommended_songs:
                 return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้")
 
-             # --- Prompt สำหรับนำเสนอ (เหมือนเดิม) ---
             presentation_model = genai.GenerativeModel("gemini-2.0-flash")
             song_titles = ", ".join([f"'{s['name']}'" for s in recommended_songs])
-            
             presentation_prompt = f"""
             As an AI Musicologist, your task is to present a recommended playlist to the user.
             The user's original request was: "{user_message}"
-            
             The playlist is based on this request, balanced against their listening habits, and contains: {song_titles}.
-            
             Instructions:
             1.  Start with a concise, professional opening.
             2.  Briefly summarize the overall mood or theme of the playlist (e.g., "upbeat and energetic," "introspective and melancholic," "a mix of modern rock and classic indie").
@@ -316,7 +327,7 @@ async def chat_endpoint(
             final_response = await presentation_model.generate_content_async(presentation_prompt)
             return ChatResponse(response=final_response.text, songs_found=recommended_songs)
 
-        # --- PATH 2: ขอเพลงฮิตติดชาร์ต (Top Charts) - (เหมือนเดิม) ---
+        # --- (Path 2: Top Charts - เหมือนเดิม) ---
         elif "get_top_charts" in intent:
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะสร้างเพลย์ลิสต์ได้ 😊")
@@ -338,38 +349,68 @@ async def chat_endpoint(
             final_response = await presentation_model.generate_content_async(presentation_prompt)
             return ChatResponse(response=final_response.text, songs_found=chart_songs_on_spotify)
 
-        # --- PATH 3: การใช้เครื่องมือ (Tool Usage) - (เหมือนเดิม) ---
+        # --- (*** แก้ไข: PATH 3: การใช้เครื่องมือ (Tool Usage) ***) ---
         elif "use_a_tool" in intent:
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะใช้เครื่องมือนี้ได้ค่ะ")
+                
             logging.info("Executing tool usage path (V2 - Fixed Schema).")
             tool_model = genai.GenerativeModel("gemini-2.0-flash")
-            search_tool_schema = Tool(
+
+            # --- (*** นี่คือ Schema ที่แก้ไขแล้ว ***) ---
+            tool_definitions = Tool(
                 function_declarations=[
                     FunctionDeclaration(
                         name='search_spotify_songs',
                         description='Search for songs on Spotify.',
-                        parameters=Schema(type=Type.OBJECT, properties={'query': Schema(type=Type.STRING, description="The search query"), 'limit': Schema(type=Type.INTEGER, description="Number of results")}, required=['query'])
+                        # (เปลี่ยน Schema/Type เป็น dict)
+                        parameters={
+                            'type': 'object',
+                            'properties': {
+                                'query': {'type': 'string', 'description': "The search query, e.g., 'artist:BTS track:Butter'"},
+                                'limit': {'type': 'integer', 'description': "Number of results to return (default 5)"}
+                            },
+                            'required': ['query']
+                        }
                     ),
                     FunctionDeclaration(
                         name='create_spotify_playlist',
                         description='Create a new Spotify playlist.',
-                        parameters=Schema(type=Type.OBJECT, properties={'playlist_name': Schema(type=Type.STRING, description="The name for the new playlist."), 'track_uris': Schema(type=Type.ARRAY, items=Schema(type=Type.STRING), description="List of Spotify track URIs")}, required=['playlist_name', 'track_uris'])
+                        # (เปลี่ยน Schema/Type เป็น dict)
+                        parameters={
+                            'type': 'object',
+                            'properties': {
+                                'playlist_name': {'type': 'string', 'description': "The desired name for the new playlist."},
+                                'track_uris': {
+                                    'type': 'array',
+                                    'items': {'type': 'string'},
+                                    'description': "A list of Spotify track URIs to add."
+                                }
+                            },
+                            'required': ['playlist_name', 'track_uris']
+                        }
                     )
                 ]
             )
+            # --- (*** จบส่วน Schema ที่แก้ไข ***) ---
+            
             tool_prompt = f"""
             You are an AI assistant. Your task is to fulfill the user's request by calling the available tools.
             Analyze the user's message and call the appropriate tool with the correct arguments.
             If no specific tool matches, respond normally.
             User's request: "{user_message}"
             """
-            tool_response = await tool_model.generate_content_async(tool_prompt, tools=[search_tool_schema])
+            
+            # (ส่ง tool_definitions ที่แก้ไขแล้วเข้าไป)
+            tool_response = await tool_model.generate_content_async(tool_prompt, tools=[tool_definitions])
+            
             response_payload = {}
+            
             if (tool_response.candidates and tool_response.candidates[0].content.parts[0].function_call):
                 function_call = tool_response.candidates[0].content.parts[0].function_call
                 tool_name, tool_args = function_call.name, {k: v for k, v in function_call.args.items()}
                 logging.info(f"AI requested to call tool '{tool_name}' with args: {tool_args}")
+                
                 if tool_name == "search_spotify_songs":
                     result = await search_spotify_songs(sp_client, **tool_args)
                     response_payload = {"response": "นี่คือผลการค้นหาค่ะ", "songs_found": result}
@@ -379,10 +420,11 @@ async def chat_endpoint(
             else:
                 logging.warning(f"AI failed to call a tool for: '{user_message}'. Falling back to chat.")
                 intent = "chat"
+            
             if intent == "use_a_tool":
                 return ChatResponse(**response_payload)
         
-        # --- PATH 4: การสนทนาทั่วไป (General Chat) - (เหมือนเดิม) ---
+        # --- (Path 4: Chat - เหมือนเดิม) ---
         if "chat" in intent:
             logging.info("Executing general chat path.")
             chat_model = genai.GenerativeModel(
@@ -390,9 +432,11 @@ async def chat_endpoint(
                 system_instruction="You are a friendly AI music assistant. Your primary conversational language is Thai. Write all explanations and conversational parts in Thai. However, you MUST use the original language for proper nouns like song titles and artist names (e.g., 'Butter' by BTS, 'ดีใจด้วยนะ' by อิ้งค์ วรันธร). Do not translate these proper nouns.",
             )
             chat_response = await chat_model.generate_content_async(user_message)
+
             if not chat_response.text:
                 logging.error("Gemini response was empty or blocked.")
                 return ChatResponse(response="ขออภัยค่ะ ตอนนี้ AI ไม่สามารถสร้างคำตอบได้ ลองใหม่อีกครั้งนะคะ")
+
             return ChatResponse(response=chat_response.text)
             
     except Exception as e:

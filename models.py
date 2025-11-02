@@ -43,4 +43,3 @@ class UpdatePlaylistRequest(BaseModel):
     """
     playlist_name: str
     songs: List[Dict]
-}

@@ -274,7 +274,7 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     found_count = sum(1 for lyric in all_rescued_data.values() if lyric)
     logging.info(f"✅ Gemini Lyric Finder (V4) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
     return all_rescued_data
-
+    
 
 async def get_filler_tracks_with_lyrics(existing_tracks: list[dict]) -> list[dict]:
     """
@@ -302,3 +302,63 @@ async def get_filler_tracks_with_lyrics(existing_tracks: list[dict]) -> list[dic
     except Exception as e:
         logging.error(f"❌ Error during Gemini Filler mission: {e}", exc_info=True)
         return []
+
+async def get_emotional_profile_from_gemini(user_message: str) -> dict:
+    """
+    (NEW) ใช้ Gemini (ตัวฉลาด) เพื่อ "แปล" คำขอนามธรรม
+    ให้อยู่ใน 8 อารมณ์ที่โมเดล 'predict_moods' เข้าใจ
+    """
+    logging.info(f"Using Gemini to translate abstract request: '{user_message}'")
+    
+    # รายการอารมณ์ 8 อย่างที่โมเดล 'predict_moods' ของเรารู้จัก
+    EMOTION_LABELS = "['joy', 'sadness', 'anger', 'fear', 'excitement', 'love', 'optimism', 'neutral']"
+
+    prompt = f"""
+    You are an AI psychologist. Your task is to analyze the user's abstract music request and translate it into a JSON mood profile based ONLY on the 8 available emotions.
+    
+    Available Emotions: {EMOTION_LABELS}
+
+    User's Request: "{user_message}"
+
+    Instructions:
+    1.  Think about the dominant emotions in the user's scenario.
+    2.  Assign scores (0.0 to 1.0) to the relevant emotions. The scores do not need to sum to 1.
+    3.  Return ONLY the valid JSON object.
+
+    Example 1:
+    User's Request: "หาเพลงแบบขับรถตอนกลางคืน"
+    Analysis: This implies a 'neutral' or slightly 'sadness' (introspective) or 'optimism' (hopeful) vibe.
+    Result: {{"neutral": 0.7, "sadness": 0.3, "optimism": 0.2}}
+
+    Example 2:
+    User's Request: "เพลงอกหักแต่ยังมูฟออนไม่ได้"
+    Analysis: This is high 'sadness' and high 'love' (still caring).
+    Result: {{"sadness": 0.9, "love": 0.7}}
+    
+    Example 3:
+    User's Request: "เพลงตอนกำลังจะชนะการแข่งขัน"
+    Analysis: This is high 'excitement' and high 'joy'.
+    Result: {{"excitement": 0.9, "joy": 0.8}}
+    """
+    
+    try:
+        response = await JSON_MODEL.generate_content_async(prompt)
+        json_text = response.text.strip()
+        
+        json_match = re.search(r'\{.*\}', json_text, re.DOTALL)
+        if not json_match:
+            logging.error(f"Gemini (Translator) returned no JSON. Raw: {json_text}")
+            return {} # คืนค่าว่างถ้าล้มเหลว
+            
+        json_data = json.loads(json_match.group(0))
+        
+        if isinstance(json_data, dict):
+            logging.info(f"Gemini (Translator) successful. Profile: {json_data}")
+            return json_data
+        else:
+            logging.error(f"Gemini (Translator) returned unexpected format.")
+            return {}
+
+    except Exception as e:
+        logging.error(f"Error in get_emotional_profile_from_gemini: {e}", exc_info=True)
+        return {}
