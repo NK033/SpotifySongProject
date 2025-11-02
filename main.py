@@ -52,7 +52,11 @@ from spotify_api import (
     search_spotify_songs
 )
 # --- นี่คือหัวใจใหม่ของเรา ---
-from recommender import get_intelligent_recommendations
+from recommender import (
+    get_intelligent_recommendations, 
+    update_user_profile_background, 
+    get_mood_profile_from_message  # (Helper ที่เราเพิ่มใน recommender.py)
+)
 
 # --- Setup ---
 Config.validate()
@@ -314,7 +318,6 @@ async def chat_endpoint(
 
         # --- PATH 2: ขอเพลงฮิตติดชาร์ต (Top Charts) - (เหมือนเดิม) ---
         elif "get_top_charts" in intent:
-            # ... (โค้ดเหมือนเดิม) ...
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะสร้างเพลย์ลิสต์ได้ 😊")
             logging.info("Executing top charts path.")
@@ -337,7 +340,6 @@ async def chat_endpoint(
 
         # --- PATH 3: การใช้เครื่องมือ (Tool Usage) - (เหมือนเดิม) ---
         elif "use_a_tool" in intent:
-            # ... (โค้ดเหมือนเดิม) ...
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะใช้เครื่องมือนี้ได้ค่ะ")
             logging.info("Executing tool usage path (V2 - Fixed Schema).")
@@ -382,7 +384,6 @@ async def chat_endpoint(
         
         # --- PATH 4: การสนทนาทั่วไป (General Chat) - (เหมือนเดิม) ---
         if "chat" in intent:
-            # ... (โค้ดเหมือนเดิม) ...
             logging.info("Executing general chat path.")
             chat_model = genai.GenerativeModel(
                 "gemini-2.0-flash",

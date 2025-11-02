@@ -328,7 +328,7 @@ async def get_intelligent_recommendations(
             lastfm_similar = await get_similar_tracks(top_tracks_list[0]['artists'][0]['name'], top_tracks_list[0]['name'], limit=30)
             if lastfm_similar: candidate_tracks_info.extend(lastfm_similar)
         except Exception as e: logging.error(f"Last.fm similar tracks failed: {e}")
-    # ... (Cascade 3 & 4 เหมือนเดิม) ...
+    
     if len(candidate_tracks_info) < MIN_CANDIDATES:
         logging.info("Cascade Strategy 3: Attempting Last.fm artist top tracks...")
         try:
@@ -336,6 +336,7 @@ async def get_intelligent_recommendations(
             lastfm_artist_top = await get_artist_top_tracks(top_artist_name, limit=20)
             if lastfm_artist_top: candidate_tracks_info.extend(lastfm_artist_top)
         except Exception as e: logging.error(f"Last.fm artist top tracks failed: {e}")
+        
     if len(candidate_tracks_info) < MIN_CANDIDATES:
         logging.info("Cascade Strategy 4: Attempting Last.fm Global Top Tracks...")
         try:
@@ -362,6 +363,7 @@ async def get_intelligent_recommendations(
 
 
     # --- Part 3: Parallel Lyric Analysis (เหมือนเดิม) ---
+    # (หมายเหตุ: เรายังไม่แก้ปัญหา "คอขวด" ของ genius_api.py ในขั้นตอนนี้)
     analysis_results = {}
     sem = asyncio.Semaphore(8)
     async def _analyze_single_track(track_info):
@@ -478,7 +480,6 @@ async def get_intelligent_recommendations(
         if len(filler_candidates_info) < needed:
             try:
                 gemini_seed_tracks = final_playlist[:5] if final_playlist else top_tracks_list[:5]
-                # (Filler ของ Gemini ยังคง "ตาบอด" อยู่ ซึ่งยอมรับได้สำหรับเพลงเติม)
                 gemini_candidates = await get_filler_tracks_with_lyrics(gemini_seed_tracks)
                 if gemini_candidates: filler_candidates_info.extend(gemini_candidates)
             except Exception as e: logging.error(f"Filler: Gemini filler failed: {e}")

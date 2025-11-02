@@ -135,7 +135,7 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
             is_generic_request = True
 
     theme_context = ""
-    if is_generic_request:
+    if is_generic_request or user_message == "🎵 แนะนำเพลงส่วนตัวให้หน่อย":
         theme_context = "The user has made a general request. Focus ONLY on their listening style."
     else:
         # ถ้าไม่ใช่คำขอทั่วไป ให้ถือว่ามี "ธีม" (เช่น "เพลงเศร้า", "เพลงตอนวิ่ง")
