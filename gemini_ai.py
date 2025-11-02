@@ -105,13 +105,13 @@ async def summarize_playlist(sp_client: spotipy.Spotify, song_uris: list[str]) -
 
 async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -> list[dict]:
     """
-    (V2 - Emotion-Aware) ขยายฐานเพลงโดยอิงจาก "สไตล์" (top_tracks) 
-    และ "ธีมคำขอ" (user_message)
+    (V3 - Lyrics-Rich) ขยายฐานเพลงโดยอิงจาก "สไตล์" และ "ธีม"
+    และ "บังคับ" ให้ส่งเหตุผล (lyrics_summary) กลับมาด้วย
     """
     if not top_tracks:
         return []
 
-    logging.info(f"Starting Gemini Seed Expansion (Emotion-Aware) for request: '{user_message}'")
+    logging.info(f"Starting Gemini Seed Expansion (V3 - Lyrics-Rich) for request: '{user_message}'")
 
     seed_data = []
     for track in top_tracks:
@@ -121,69 +121,64 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
                 "title": track['name']
             })
 
-    # --- (ใหม่: สร้าง "ธีม" จากคำขอ) ---
-    # เราจะตรวจสอบว่าคำขอเป็นคำขอทั่วไปหรือไม่
+    # --- (ส่วน "ธีม" เหมือนเดิม) ---
     generic_requests_th = ["แนะนำเพลง", "เพลงแนะนำ", "ขอเพลงหน่อย", "หาเพลง"]
     generic_requests_en = ["recommend", "suggest", "find me songs"]
-    
     is_generic_request = False
     msg_lower = user_message.lower()
-    
-    # ตรวจสอบว่าเป็นประโยคทั่วไปสั้นๆ หรือไม่
     if len(msg_lower) < 25:
         if any(keyword in msg_lower for keyword in generic_requests_th + generic_requests_en):
             is_generic_request = True
-
     theme_context = ""
     if is_generic_request or user_message == "🎵 แนะนำเพลงส่วนตัวให้หน่อย":
         theme_context = "The user has made a general request. Focus ONLY on their listening style."
     else:
-        # ถ้าไม่ใช่คำขอทั่วไป ให้ถือว่ามี "ธีม" (เช่น "เพลงเศร้า", "เพลงตอนวิ่ง")
         theme_context = f"IMPORTANT: The user has a specific request right now. They want songs that fit this theme: '{user_message}'. The suggestions MUST match this theme."
-    # --- (จบส่วนใหม่) ---
+    # --- (จบส่วน "ธีม") ---
 
     prompt = f"""
     You are an AI music expert.
     
-    1. Analyze the user's top tracks to understand their core listening style (e.g., genres, artists, language like J-Pop, K-Pop, etc.).
-       User's Top Tracks (Core Style): {json.dumps(seed_data)}
-    
-    2. Read the user's current request to understand their desired theme or mood.
-       User's Current Request (Theme): {theme_context}
+    1. Analyze the user's top tracks (Core Style): {json.dumps(seed_data)}
+    2. Analyze the user's current request (Theme): {theme_context}
 
-    3. Suggest 20 new songs. The songs MUST match the user's core style (from step 1) AND their current request/theme (from step 2).
-       (For example, if style is 'J-Pop' and theme is 'sad', suggest 'Sad J-Pop songs'.)
+    3. Suggest 20 new songs that match BOTH the core style AND the theme.
     
-    Return ONLY a valid JSON list of objects, where each object has "artist" and "title".
-    Example: [{{"artist": "Artist Name", "title": "Song Title"}}, ...]
+    4. FOR EACH SONG, you MUST provide a "lyrics_summary" or "reasoning" (in English or Thai) that explains WHY this song fits the theme.
+       (e.g., "A chill, introspective song about driving alone," "Lyrically, this song is about sadness and longing.")
+    
+    Return ONLY a valid JSON list of objects.
+    Example: [
+        {{"artist": "Artist Name", "title": "Song Title", "lyrics_summary": "Reasoning why this song fits..."}},
+        ...
+    ]
     """
     
     try:
         response = await JSON_MODEL.generate_content_async(prompt)
-        # ... (ส่วนการ parse JSON เหมือนเดิม) ...
         json_text = response.text.strip()
         
-        # ค้นหา [] หรือ {}
-        json_match = re.search(r'\[.*\]|\{.*\}', json_text, re.DOTALL)
+        json_match = re.search(r'\[.*\]', json_text, re.DOTALL) # หา List [ ... ]
         if not json_match:
-            logging.error(f"Gemini seed expansion returned no JSON. Raw: {json_text}")
+            logging.error(f"Gemini (Lyrics-Rich) returned no JSON List. Raw: {json_text}")
             return []
             
         json_data = json.loads(json_match.group(0))
         
-        # ตรวจสอบว่าผลลัพธ์เป็น List (ตามที่เราสั่ง) หรือไม่
         if isinstance(json_data, list):
-            logging.info(f"Gemini Seed Expansion successful. Found {len(json_data)} candidates.")
-            return json_data
-        elif isinstance(json_data, dict) and "songs" in json_data and isinstance(json_data["songs"], list):
-             logging.info(f"Gemini Seed Expansion successful (wrapped in object). Found {len(json_data['songs'])} candidates.")
-             return json_data["songs"]
+            # (เพิ่ม) กรองเอาเฉพาะเพลงที่มี 'lyrics_summary' จริงๆ
+            valid_candidates = [
+                track for track in json_data 
+                if track.get("artist") and track.get("title") and track.get("lyrics_summary")
+            ]
+            logging.info(f"Gemini (Lyrics-Rich) successful. Found {len(valid_candidates)} valid candidates.")
+            return valid_candidates
         else:
-            logging.error(f"Gemini seed expansion returned unexpected JSON format.")
+            logging.error(f"Gemini (Lyrics-Rich) returned unexpected JSON format.")
             return []
 
     except Exception as e:
-        logging.error(f"Error in get_gemini_seed_expansion: {e}", exc_info=True)
+        logging.error(f"Error in get_gemini_seed_expansion (Lyrics-Rich): {e}", exc_info=True)
         return []
 
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
