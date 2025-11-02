@@ -7,9 +7,10 @@ class ChatRequest(BaseModel):
     Model สำหรับ Request ที่เข้ามายัง /chat endpoint
     """
     message: str
+    intent: Optional[str] = None # <-- นี่คือส่วนที่เราเพิ่มเข้ามา
     spotify_access_token: Optional[str] = None
-    spotify_refresh_token: Optional[str] = None # <-- เพิ่มบรรทัดนี้
-    expires_at: Optional[int] = None # <-- เพิ่มบรรทัดนี้
+    spotify_refresh_token: Optional[str] = None 
+    expires_at: Optional[int] = None 
  
 
 class ChatResponse(BaseModel):
@@ -19,7 +20,7 @@ class ChatResponse(BaseModel):
     response: str
     songs_found: Optional[List[Dict]] = None 
     playlist_info: Optional[Dict] = None 
-    new_spotify_token_info: Optional[Dict] = None # <-- เพิ่มบรรทัดนี้
+    new_spotify_token_info: Optional[Dict] = None 
     artist_list: Optional[List[str]] = None 
     song_detail: Optional[Dict] = None 
 
@@ -42,3 +43,4 @@ class UpdatePlaylistRequest(BaseModel):
     """
     playlist_name: str
     songs: List[Dict]
+}

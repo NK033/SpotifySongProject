@@ -22,9 +22,10 @@ const getAuthHeaders = () => {
  * Sends a chat message to the backend.
  * Can be called as a logged-in user or a guest.
  * @param {string} message - The user's message.
+ * @param {string | null} intent - (*** แก้ไข: เพิ่มพารามิเตอร์ intent ***)
  * @returns {Promise<object>} - The JSON response from the server.
  */
-export const postChatMessage = async (message) => {
+export const postChatMessage = async (message, intent = null) => {
   let headers = { 'Content-Type': 'application/json' };
   try {
     headers = { ...headers, ...getAuthHeaders() };
@@ -35,7 +36,8 @@ export const postChatMessage = async (message) => {
   const response = await fetch('/chat', {
     method: 'POST',
     headers: headers,
-    body: JSON.stringify({ message })
+    // (*** แก้ไข: เพิ่ม intent เข้าไปใน body ***)
+    body: JSON.stringify({ message, intent })
   });
 
   if (!response.ok) {

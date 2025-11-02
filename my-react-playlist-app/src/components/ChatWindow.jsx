@@ -13,8 +13,8 @@ function ChatWindow({
   onCreatePlaylist,
   userInput,
   onUserInputChange,
-  onSendMessage, // นี่คือฟังก์ชัน sendMessageToBackend
-  suggestedPrompts // <-- รับ Prompts แบบ Dynamic
+  onSendMessage, // นี่คือฟังก์ชัน sendMessageToBackend (ที่รับ message และ intent)
+  suggestedPrompts // <-- รับ Prompts แบบ Dynamic (ที่เป็น Object)
 }) {
   const chatEndRef = useRef(null);
 
@@ -22,10 +22,10 @@ function ChatWindow({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory]);
 
-  // (แก้ไข) ส่ง `prompt` เข้าไปใน `onSendMessage` โดยตรงเพื่อแก้บั๊ก
-  const handlePromptClick = (prompt) => {
-    onUserInputChange({ target: { value: prompt } }); // 1. ตั้งค่าในช่องพิมพ์ (เพื่อ UX)
-    onSendMessage(prompt); // 2. ส่งข้อความไปเลยทันที
+  // (*** แก้ไข: รับ promptObj และส่ง intent ไปด้วย ***)
+  const handlePromptClick = (promptObj) => {
+    onUserInputChange({ target: { value: promptObj.prompt } }); // 1. ตั้งค่าในช่องพิมพ์ (เพื่อ UX)
+    onSendMessage(promptObj.prompt, promptObj.intent); // 2. ส่งข้อความและ "intent" ไปเลยทันที
   };
 
   return (
@@ -60,10 +60,10 @@ function ChatWindow({
         </div>
       )}
 
-      {/* แสดงปุ่มลัด เมื่อยังไม่เริ่มแชท (หรือแชทว่าง) */}
+      {/* (Component นี้จะอ่าน promptObj.prompt เอง) */}
       {chatHistory.length <= 1 && (
         <SuggestedPrompts 
-          prompts={suggestedPrompts} // <-- ส่ง Prompts แบบ Dynamic
+          prompts={suggestedPrompts} 
           onPromptClick={handlePromptClick} 
         />
       )}
@@ -74,13 +74,14 @@ function ChatWindow({
             type="text"
             value={userInput}
             onChange={onUserInputChange}
-            // เรียก onSendMessage โดยไม่ส่งอาร์กิวเมนต์ (มันจะไปดึงจาก userInput state)
-            onKeyPress={(e) => e.key === 'Enter' && onSendMessage()} 
+            // (*** แก้ไข: ส่ง (userInput, null) เมื่อผู้ใช้พิมพ์เอง ***)
+            onKeyPress={(e) => e.key === 'Enter' && onSendMessage(userInput, null)} 
             placeholder="พิมพ์ข้อความของคุณ..."
             className="w-full p-4 pl-6 pr-16 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors duration-300 text-[var(--text-primary)]"
           />
           <button 
-            onClick={() => onSendMessage()} // เรียก onSendMessage โดยไม่ส่งอาร์กิวเมนต์
+            // (*** แก้ไข: ส่ง (userInput, null) เมื่อผู้ใช้พิมพ์เอง ***)
+            onClick={() => onSendMessage(userInput, null)} 
             className="absolute right-2 text-white bg-gradient-to-r from-green-500 to-blue-500 rounded-full h-10 w-10 flex items-center justify-center hover:opacity-90 transition-opacity"
           >
             <i className="fas fa-paper-plane"></i>

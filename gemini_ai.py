@@ -5,6 +5,7 @@ import json
 import asyncio
 import spotipy
 from fastapi import HTTPException, status
+from sympy import re
 from database import save_song_analysis_to_db, get_song_analysis_from_db
 from genius_api import get_lyrics
 from custom_model import predict_moods
@@ -102,54 +103,87 @@ async def summarize_playlist(sp_client: spotipy.Spotify, song_uris: list[str]) -
         logging.error(f"Error calling Gemini API for playlist summary: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error summarizing playlist.")
 
-async def get_gemini_seed_expansion(top_tracks: list[dict]) -> list[dict]:
+async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -> list[dict]:
     """
-    (V-DNA) Finds the unifying "Musical" and "Creator" DNA.
+    (V2 - Emotion-Aware) ขยายฐานเพลงโดยอิงจาก "สไตล์" (top_tracks) 
+    และ "ธีมคำขอ" (user_message)
     """
-    logging.info("--- Executing Gemini Seed Expansion (V-DNA) ---")
-    track_list_str = "\n".join([f"- '{t['name']}' by {t['artists'][0]['name']}" for t in top_tracks[:10]])
+    if not top_tracks:
+        return []
+
+    logging.info(f"Starting Gemini Seed Expansion (Emotion-Aware) for request: '{user_message}'")
+
+    seed_data = []
+    for track in top_tracks:
+        if track and track.get('name') and track.get('artists'):
+            seed_data.append({
+                "artist": track['artists'][0]['name'],
+                "title": track['name']
+            })
+
+    # --- (ใหม่: สร้าง "ธีม" จากคำขอ) ---
+    # เราจะตรวจสอบว่าคำขอเป็นคำขอทั่วไปหรือไม่
+    generic_requests_th = ["แนะนำเพลง", "เพลงแนะนำ", "ขอเพลงหน่อย", "หาเพลง"]
+    generic_requests_en = ["recommend", "suggest", "find me songs"]
     
-    # FINAL VERSION: This prompt combines both "Musical" and "Creator" DNA.
+    is_generic_request = False
+    msg_lower = user_message.lower()
+    
+    # ตรวจสอบว่าเป็นประโยคทั่วไปสั้นๆ หรือไม่
+    if len(msg_lower) < 25:
+        if any(keyword in msg_lower for keyword in generic_requests_th + generic_requests_en):
+            is_generic_request = True
+
+    theme_context = ""
+    if is_generic_request:
+        theme_context = "The user has made a general request. Focus ONLY on their listening style."
+    else:
+        # ถ้าไม่ใช่คำขอทั่วไป ให้ถือว่ามี "ธีม" (เช่น "เพลงเศร้า", "เพลงตอนวิ่ง")
+        theme_context = f"IMPORTANT: The user has a specific request right now. They want songs that fit this theme: '{user_message}'. The suggestions MUST match this theme."
+    # --- (จบส่วนใหม่) ---
+
     prompt = f"""
-    You are a versatile, world-class music curator.
+    You are an AI music expert.
+    
+    1. Analyze the user's top tracks to understand their core listening style (e.g., genres, artists, language like J-Pop, K-Pop, etc.).
+       User's Top Tracks (Core Style): {json.dumps(seed_data)}
+    
+    2. Read the user's current request to understand their desired theme or mood.
+       User's Current Request (Theme): {theme_context}
 
-    **Listener's Favorites:**
-    {track_list_str}
-
-    **Your Mission: Find the Unifying "DNA"**
-
-    1.  **Analyze the "Musical DNA":**
-        First, find the core sound.
-        * **Energy & Tempo:** (e.g., high-energy, fast, dramatic)
-        * **Instrumentation:** (e.g., heavy rock guitars, orchestral strings, pop synths)
-        * **Vocal Style:** (e.g., passionate, strong female vocal)
-
-    2.  **Analyze the "Creator DNA":**
-        Second, look for patterns in who made the music. This is just as important.
-        * **Artists:** Are there recurring artists? (e.g., Aimer, Eir Aoi)
-        * **Composers:** Is there a common composer? (e.g., Hiroyuki Sawano)
-        * **Franchise/CVs:** Is there a link to a franchise or voice actor?
-
-    3.  **Crucial Example:**
-        A user's list has **'START:DASH!!' (by μ's)** and **'IGNITE' (by Eir Aoi)**.
-        * **Correct Analysis:** 'This is **one single vibe**. The *unifying DNA* is: 1) high-energy tempo, 2) powerful rock/pop instrumentation, 3) a passionate female vocal, AND 4) a taste for prolific female anisong artists (μ's and Eir Aoi both fit this creator profile).'
-
-    4.  **Curate Recommendations (Your Strategy):**
-        Your recommendations *must* be a blend based on this complete DNA.
-        * **Priority 1:** Find more songs from the **same artists** (or composers/CVs) that *also* match the **Musical DNA**.
-        * **Priority 2:** Find songs from **new artists** that are a perfect match for the *entire* DNA profile (both musical and creator vibe).
-
-    **Response Format Requirement (Crucial):**
-    Respond with a JSON object: {{"recommendations": [{{"artist": "artist_name", "track": "track_name"}}]}}
+    3. Suggest 20 new songs. The songs MUST match the user's core style (from step 1) AND their current request/theme (from step 2).
+       (For example, if style is 'J-Pop' and theme is 'sad', suggest 'Sad J-Pop songs'.)
+    
+    Return ONLY a valid JSON list of objects, where each object has "artist" and "title".
+    Example: [{{"artist": "Artist Name", "title": "Song Title"}}, ...]
     """
+    
     try:
         response = await JSON_MODEL.generate_content_async(prompt)
-        data = json.loads(response.text)
-        recommendations = [{"artist": item["artist"], "title": item["track"]} for item in data.get("recommendations", [])]
-        logging.info(f"✅ Gemini V-DNA found {len(recommendations)} new seed tracks.")
-        return recommendations
+        # ... (ส่วนการ parse JSON เหมือนเดิม) ...
+        json_text = response.text.strip()
+        
+        # ค้นหา [] หรือ {}
+        json_match = re.search(r'\[.*\]|\{.*\}', json_text, re.DOTALL)
+        if not json_match:
+            logging.error(f"Gemini seed expansion returned no JSON. Raw: {json_text}")
+            return []
+            
+        json_data = json.loads(json_match.group(0))
+        
+        # ตรวจสอบว่าผลลัพธ์เป็น List (ตามที่เราสั่ง) หรือไม่
+        if isinstance(json_data, list):
+            logging.info(f"Gemini Seed Expansion successful. Found {len(json_data)} candidates.")
+            return json_data
+        elif isinstance(json_data, dict) and "songs" in json_data and isinstance(json_data["songs"], list):
+             logging.info(f"Gemini Seed Expansion successful (wrapped in object). Found {len(json_data['songs'])} candidates.")
+             return json_data["songs"]
+        else:
+            logging.error(f"Gemini seed expansion returned unexpected JSON format.")
+            return []
+
     except Exception as e:
-        logging.error(f"❌ Error during Gemini Seed Expansion: {e}", exc_info=True)
+        logging.error(f"Error in get_gemini_seed_expansion: {e}", exc_info=True)
         return []
 
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
