@@ -277,7 +277,7 @@ async def chat_endpoint(
                 token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
                 background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
 
-            logging.info("Executing intelligent recommendation path (V6 - Abstract Fallback).")
+            logging.info("Executing intelligent recommendation path (V7 - Generic Bypass).") # <--- (V7)
             
             historical_profile = await get_user_mood_profile(user_id)
             if not historical_profile:
@@ -287,15 +287,9 @@ async def chat_endpoint(
                 if not historical_profile:
                      return ChatResponse(response="ขออภัยค่ะ ฉันยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อยนะคะ")
 
-            # --- (ตรรกะ "ล่าม" V6 - เหมือนเดิม) ---
-            emotional_profile = await get_mood_profile_from_message(user_message)
-            is_highly_neutral = True
-            is_generic_request = False
-            if emotional_profile:
-                for mood, score in emotional_profile.items():
-                    if mood != 'neutral' and score > 0.3:
-                        is_highly_neutral = False
-                        break
+            # --- [ FIX: ตรรกะ "Bypass" ที่เราคุยกัน ] ---
+            
+            # 1. ตรวจสอบคำขอ "ทั่วไป" (Generic) ก่อน
             generic_prompts = [
                 "🎵 แนะนำเพลงส่วนตัวให้หน่อย", 
                 "แนะนำเพลง", 
@@ -303,24 +297,43 @@ async def chat_endpoint(
                 "ขอเพลงหน่อย", 
                 "หาเพลง"
             ]
+            
+            emotional_profile = {} # 2. ตั้งค่าเริ่มต้นเป็น Dict ว่าง
+            
             if user_message in generic_prompts:
-                is_generic_request = True
-            if is_highly_neutral and not is_generic_request:
-                logging.warning(f"'predict_moods' failed to understand '{user_message}'. Falling back to Gemini Translator.")
-                emotional_profile = await get_emotional_profile_from_gemini(user_message)
-            # --- (จบตรรกะ "ล่าม") ---
+                # 3. ถ้าเป็นคำขอทั่วไป -> ไม่ต้องวิเคราะห์อารมณ์
+                logging.info(f"Generic request detected. Using PURE User Taste Profile.")
+                # (ปล่อยให้ emotional_profile = {} ว่างไว้)
+            else:
+                # 4. ถ้าเป็นคำขอเฉพาะ (เช่น "หาเพลงเศร้า") ค่อยวิเคราะห์อารมณ์
+                logging.info(f"Specific request detected. Analyzing request emotion...")
+                emotional_profile = await get_mood_profile_from_message(user_message)
+                is_highly_neutral = True
+                
+                if emotional_profile:
+                    for mood, score in emotional_profile.items():
+                        if mood != 'neutral' and score > 0.3:
+                            is_highly_neutral = False
+                            break
+                
+                if is_highly_neutral:
+                    logging.warning(f"'predict_moods' failed to understand '{user_message}'. Falling back to Gemini Translator.")
+                    emotional_profile = await get_emotional_profile_from_gemini(user_message)
+            
+            # --- (จบตรรกะ "Bypass") ---
 
             recommended_songs = await get_intelligent_recommendations(
                 sp_client, 
                 user_id, 
-                historical_profile,
-                emotional_profile,
+                historical_profile,  # <--- รสนิยมในอดีต (เพียวๆ)
+                emotional_profile,   # <--- อารมณ์ปัจจุบัน (ถ้ามี)
                 user_message
             )
 
             if not recommended_songs:
                 return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้")
 
+            # ... (โค้ดส่วน Presentation Model เหมือนเดิม) ...
             presentation_model = genai.GenerativeModel("gemini-2.0-flash")
             song_titles = ", ".join([f"'{s['name']}'" for s in recommended_songs])
             presentation_prompt = f"""

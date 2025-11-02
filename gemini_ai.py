@@ -1,11 +1,11 @@
-# gemini_ai.py (FIXED V3 - Added JSON Sanitizer)
+# gemini_ai.py (FIXED V4 - Added "No Duplicates" instruction)
 import logging
 import google.generativeai as genai
 import json
 import asyncio
 import spotipy
 from fastapi import HTTPException, status
-import re # (Import 're' ที่ถูกต้อง)
+import re 
 from database import save_song_analysis_to_db, get_song_analysis_from_db
 from genius_api import get_lyrics
 from custom_model import predict_moods
@@ -23,17 +23,14 @@ JSON_MODEL = genai.GenerativeModel(
 )
 # =======================================
 
-# --- [ ใหม่: ฟังก์ชันฆ่าเชื้อ ] ---
+# --- [ ฟังก์ชันฆ่าเชื้อ JSON ] ---
 def _sanitize_json_string(json_str: str) -> str:
     """
     พยายามแก้ไขอักขระ \ (backslash) ที่ผิดพลาดซึ่ง Gemini สร้างขึ้น
     """
-    # นี่คือการแทนที่ \ ที่ *ไม่ได้* ตามด้วยอักขระ escape ที่ถูกต้อง (เช่น \n, \t, \\, \")
-    # ด้วย \\ (backslash สองตัว)
     try:
         return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', json_str)
     except Exception:
-        # ถ้า regex ล้มเหลว ให้คืนค่าเดิม
         return json_str
 # --- [ จบฟังก์ชันใหม่ ] ---
 
@@ -84,7 +81,6 @@ async def summarize_playlist(sp_client: spotipy.Spotify, song_uris: list[str]) -
     # (ฟังก์ชันนี้ไม่ได้รับผลกระทบ เพราะใช้ TEXT_MODEL)
     tasks = [get_song_analysis_details(sp_client, uri) for uri in song_uris]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    # ... (โค้ดที่เหลือเหมือนเดิม) ...
     valid_analyses = [res for res in results if not isinstance(res, Exception)]
 
     prompt = "นี่คือข้อมูลการวิเคราะห์ของแต่ละเพลงในเพลย์ลิสต์:\n\n"
@@ -117,7 +113,6 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
     # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     if not top_tracks:
         return []
-    # ... (โค้ดสร้าง prompt เหมือนเดิม) ...
     logging.info(f"Starting Gemini Seed Expansion (V3 - Lyrics-Rich) for request: '{user_message}'")
 
     seed_data = []
@@ -163,7 +158,7 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         response = await JSON_MODEL.generate_content_async(prompt)
         json_text = response.text.strip()
         
-        json_match = re.search(r'\[.*\]', json_text, re.DOTALL) # หา List [ ... ]
+        json_match = re.search(r'\[.*\]', json_text, re.DOTALL) 
         if not json_match:
             logging.error(f"Gemini (Lyrics-Rich) returned no JSON List. Raw: {json_text}")
             return []
@@ -192,7 +187,6 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     if not failed_tracks: 
         return {}
-    # ... (โค้ด Batching loop เหมือนเดิม) ...
     logging.info(f"--- Activating Gemini Lyric Finder (Rate-Limit Proof V4) for {len(failed_tracks)} tracks... ---")
     BATCH_SIZE = 5
     DELAY_BETWEEN_BATCHES = 5
@@ -202,7 +196,6 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
         batch_tracks = failed_tracks[i:i + BATCH_SIZE]
         logging.info(f"--- Processing batch {i//BATCH_SIZE + 1}/{len(failed_tracks)//BATCH_SIZE + 1} ---")
 
-        # ... (โค้ดสร้าง tracks_for_prompt และ id_to_key_map เหมือนเดิม) ...
         tracks_for_prompt = []
         id_to_key_map = {}
         for j, track in enumerate(batch_tracks):
@@ -271,25 +264,29 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     logging.info(f"✅ Gemini Lyric Finder (V4) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
     return all_rescued_data
     
-
+# --- [ นี่คือฟังก์ชันที่แก้ไข ] ---
 async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardrail: str) -> list[dict]:
-    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
+    """
+    (V8.2 - Language Aware & No Duplicates)
+    """
     if not existing_tracks: return []
-    logging.info("--- Activating Gemini Playlist Filler... ---")
+    logging.info("--- Activating Gemini Playlist Filler (V8.2)... ---")
     track_list_str = "\n".join([f"- '{t['name']}' by {t['artists'][0]['name']}" for t in existing_tracks])
     
-    # (เพิ่ม lang_guardrail เข้าไปใน Prompt)
     prompt = f"""
-    This playlist is too short:
+    This playlist is too short. Here are the songs already in it (or that we are using as seeds):
     {track_list_str}
 
-    **CRITICAL INSTRUCTION:**
+    **CRITICAL INSTRUCTION 1 (LANGUAGE):**
     All recommended songs MUST be in the same language as the seed tracks.
     The required language code is: '{lang_guardrail}'.
     (Example: 'cjk' means Japanese/Korean, 'latin' means English/Spanish, 'th' means Thai).
     DO NOT suggest songs in other languages.
+    
+    **CRITICAL INSTRUCTION 2 (NO DUPLICATES):**
+    DO NOT recommend the songs listed above. You must find NEW, SIMILAR songs.
 
-    Recommend up to 20 more songs that match the genre, language, and emotional vibe.
+    Recommend up to 20 new songs that match the genre, language, and emotional vibe.
     
     **Response Format Requirement (Crucial):**
     - Respond with a JSON object containing a single key "filler_tracks".
@@ -298,25 +295,24 @@ async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardr
     """
     try:
         response = await JSON_MODEL.generate_content_async(prompt)
-        json_text = response.text.strip() # 1. เอาข้อความดิบออกมาก่อน
+        json_text = response.text.strip() 
 
-        # 2. [FIX] ค้นหา { ... } ที่เป็น JSON object
         json_match = re.search(r'\{.*\S.*\}', json_text, re.DOTALL)
         
         if not json_match:
             logging.error(f"❌ Gemini (Filler) returned no JSON object. Raw: {json_text}")
             return []
 
-        # 3. [FIX] ฆ่าเชื้อ
         sanitized_json_string = _sanitize_json_string(json_match.group(0))
         data = json.loads(sanitized_json_string)
         
         filler_tracks = data.get("filler_tracks", [])
-        logging.info(f"✅ Gemini Filler found {len(filler_tracks)} emergency candidates.")
+        logging.info(f"✅ Gemini Filler (V8.2) found {len(filler_tracks)} emergency candidates.")
         return filler_tracks
     except Exception as e:
         logging.error(f"❌ Error during Gemini Filler mission: {e}", exc_info=True)
         return []
+# --- [ จบฟังก์ชันที่แก้ไข ] ---
 
 async def get_emotional_profile_from_gemini(user_message: str) -> dict:
     # (ฟังก์ชันนี้ **ต้อง** แก้ไข)

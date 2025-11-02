@@ -150,8 +150,8 @@ async def _determine_language_guardrail(sp_client: spotipy.Spotify, seed_tracks:
 
     logging.info(f"Language profile: {dict(lang_counts)}")
 
-    # ตั้งเกณฑ์ (Threshold) ที่ 80%
-    if percentage >= 80:
+    # ตั้งเกณฑ์ (Threshold) ที่ 60%
+    if percentage >= 60:
         logging.info(f"✅ Language Guardrail ENABLED: '{dominant_lang}' ({percentage:.0f}%)")
         return dominant_lang
     
@@ -318,19 +318,17 @@ async def get_intelligent_recommendations(
     user_message: str
 ) -> list[dict]:
     """
-    (Hybrid V14 - Iterative Loop)
+    (Hybrid V15.2 - Randomized Top-Track Seeds)
     """
     # --- Constants ---
     MINIMUM_PLAYLIST_SIZE = 10
     STRICT_SCORE_THRESHOLD = 0.45 
     LOOSE_SCORE_THRESHOLD = 0.25
-    # (ใหม่) ตัวแปรสำหรับ Loop ที่คุณขอ
     MAX_FILLER_ITERATIONS = 3 
 
-    logging.info("--- Initializing Hybrid V14: Iterative Curation Loop ---")
+    logging.info("--- Initializing V15.2: Iterative Curation Loop (Randomized Seeds) ---")
 
-    # (Part 1: Blacklist - เหมือนเดิม)
-    # (*** แก้ไข: เปลี่ยนชื่อ blacklist_uris เป็น master_blacklist เพื่อให้ Loop อัปเดตได้ ***)
+    # (Part 1: Blacklist)
     top_tracks_list = await get_user_top_tracks(sp_client, limit=10)
     if not top_tracks_list:
         return await get_fallback_recommendations(sp_client)
@@ -341,10 +339,9 @@ async def get_intelligent_recommendations(
     feedback_data = await get_user_feedback(user_id)
     disliked_uris = feedback_data.get('dislikes', set())
     
-    # (*** แก้ไข: master_blacklist จะเก็บเพลงที่ "เคยเห็นแล้ว" ทั้งหมดในทุก Loop ***)
     master_blacklist = existing_uris.union(history_uris).union(disliked_uris)
 
-    # (Part 2: Candidate Generation - เหมือนเดิม แต่เพิ่ม Strategy 5)
+    # (Part 2: Candidate Generation - พึ่งพา Gemini และ Last.fm เท่านั้น)
     candidate_tracks_info = []
     MIN_CANDIDATES = 30
     logging.info("Cascade Strategy 1: Attempting Gemini Seed Expansion...")
@@ -374,35 +371,8 @@ async def get_intelligent_recommendations(
             if lastfm_global_top: candidate_tracks_info.extend(lastfm_global_top)
         except Exception as e: logging.error(f"Last.fm global top tracks failed: {e}")
 
-    # --- (*** ใหม่: [FIX] เพิ่ม Strategy 5 เพื่อแก้บั๊ก 0-candidate ***) ---
-    logging.info("Cascade Strategy 5: Attempting Spotify Seed Expansion...")
-    if user_seed_tracks:
-        try:
-            seed_track_ids = [t['id'] for t in user_seed_tracks if t.get('id')][:3]
-            seed_artist_ids = [t['artists'][0]['id'] for t in user_seed_tracks if t.get('artists') and t['artists'][0].get('id')][:2]
-            
-            if seed_track_ids or seed_artist_ids:
-                spotify_recs = await asyncio.to_thread(
-                    sp_client.recommendations,
-                    seed_tracks=seed_track_ids,
-                    seed_artists=seed_artist_ids,
-                    limit=30 # หาเพลงใหม่มาเพิ่ม 30 เพลง
-                )
-                if spotify_recs and spotify_recs['tracks']:
-                    logging.info(f"[FIX] Spotify Expansion found {len(spotify_recs['tracks'])} new candidates.")
-                    for track in spotify_recs['tracks']:
-                        if track and track.get('artists'):
-                            candidate_tracks_info.append({
-                                "artist": track['artists'][0].get('name'),
-                                "title": track.get('name'),
-                                "lyrics_summary": None 
-                            })
-            else:
-                 logging.warning("Spotify Expansion: No valid seed IDs found.")
-        except Exception as e:
-            logging.error(f"Spotify Seed Expansion failed: {e}")
-    # --- (*** จบ [FIX] ***) ---
-
+    # (Strategy 5 ถูกลบไปแล้ว)
+    
     if not candidate_tracks_info:
         logging.error("All candidate generation plans failed. Using Spotify's direct fallback.")
         return await get_fallback_recommendations(sp_client)
@@ -418,7 +388,7 @@ async def get_intelligent_recommendations(
     logging.info(f"--- 🧬 Candidate Tracks (Total: {len(candidate_tracks_info)}) ---")
 
     
-    # (Part 3: Parallel Lyric Analysis - เหมือนเดิม)
+    # (Part 3: Parallel Lyric Analysis)
     analysis_results = {}
     sem = asyncio.Semaphore(8)
 
@@ -432,7 +402,6 @@ async def get_intelligent_recommendations(
             if not spotify_results: return
             spotify_track = spotify_results[0]
             
-            # (*** แก้ไข: ใช้ Blacklist ที่ส่งเข้ามา ***)
             if spotify_track['uri'] in blacklist_to_use:
                 return
             
@@ -440,12 +409,14 @@ async def get_intelligent_recommendations(
             track_name, artist = spotify_track.get('name', ''), spotify_track.get('artists', [{}])[0]
             artist_id, artist_name = artist.get('id'), artist.get('name', '')
             
-            if artist_id:
+            if artist_id: 
                 try:
                     artist_details = await asyncio.to_thread(sp_client.artist, artist_id=artist_id)
                     if artist_details: 
                         lang = _classify_lang_from_genres(artist_details.get('genres', []))
-                except Exception: pass
+                except Exception: 
+                    pass 
+
             if lang is None:
                 lang = _detect_language_from_string(track_name, artist_name)
             
@@ -462,14 +433,10 @@ async def get_intelligent_recommendations(
                 moods_tuple = await analyze_and_cache_song_moods(spotify_track, lang_hint=lang)
                 moods = moods_tuple[0] 
 
-            # (*** แก้ไข: เพิ่มการจัดการเพลงที่หาเนื้อไม่เจอ ***)
             if not moods:
-                # ถ้าหาเนื้อเพลงไม่เจอ, ให้คะแนนเป็นกลาง (neutral)
-                # เพื่อให้เพลงยังอยู่ในระบบ ไม่ถูกคัดทิ้ง (แก้บั๊ก 0-track)
                 logging.warning(f"Failed to find lyrics for '{track_name}'. Scoring as 'neutral'.")
-                moods = {'neutral': 1.0} # ให้คะแนน neutral 1.0
+                moods = {'neutral': 1.0} 
             
-            # (*** แก้ไข: เพิ่ม URI เข้า Blacklist ทันทีที่ประมวลผลเสร็จ ***)
             master_blacklist.add(spotify_track['uri'])
             analysis_results[spotify_track['uri']] = {"track_object": spotify_track, "moods": moods}
 
@@ -478,13 +445,12 @@ async def get_intelligent_recommendations(
         finally:
             sem.release()
 
-    # (*** แก้ไข: ส่ง master_blacklist เข้าไป ***)
     analysis_tasks = [_analyze_single_track(info, master_blacklist) for info in candidate_tracks_info]
-    await asyncio.gather(*analysis_tasks)
+    await asyncio.gather(*analysis_tasks) # (FIX 1)
     logging.info(f"Completed initial analysis. Found lyrics/data for {len(analysis_results)} tracks.")
 
     
-    # (Part 4: Scoring Helpers - เหมือนเดิม)
+    # (Part 4: Scoring Helpers)
     disliked_fingerprints = []
     for uri in disliked_uris:
         track_info = await get_spotify_track_data(sp_client, uri)
@@ -502,11 +468,10 @@ async def get_intelligent_recommendations(
         except (ValueError, KeyError, IndexError, TypeError): continue
     average_year = total_years / track_count if track_count > 0 else None
 
-    # (Part 5: Two-Vector Scoring - เหมือนเดิม)
+    # (Part 5: Two-Vector Scoring)
     logging.info("--- 📈 Scoring All Analyzed Candidates (V5 Two-Vector) ---")
     all_scored_candidates = []
     if not analysis_results:
-        # (FIX 1 ของเราควรจะป้องกันไม่ให้มาถึงจุดนี้ แต่ถ้ามาถึงจริงๆ ก็ไป Fallback)
         logging.warning("No candidates left after analysis. Returning fallback.")
         return await get_fallback_recommendations(sp_client)
     
@@ -518,6 +483,7 @@ async def get_intelligent_recommendations(
         spotify_track = result["track_object"]
         song_fingerprint = result["moods"]
         stylistic_score = calculate_cosine_similarity(stylistic_profile, song_fingerprint)
+        
         if has_target_emotion:
             emotional_score = calculate_cosine_similarity(emotional_profile, song_fingerprint)
             combined_mood_score = (emotional_score * 0.7) + (stylistic_score * 0.3)
@@ -546,7 +512,7 @@ async def get_intelligent_recommendations(
     
     all_scored_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
     
-    # (*** แก้ไข: Part 6: Iterative Filler Loop (ที่คุณขอ) ***)
+    # (Part 6: Iterative Filler Loop)
     logging.info(f"--- Starting Round 1: Strict Filtering (Threshold: {STRICT_SCORE_THRESHOLD}) ---")
     final_playlist = [
         track for track in all_scored_candidates 
@@ -554,45 +520,48 @@ async def get_intelligent_recommendations(
     ]
     logging.info(f"Round 1 completed. {len(final_playlist)} songs passed strict filtering.")
 
-    # --- เริ่ม Loop ที่คุณขอ ---
+    # --- เริ่ม Loop (Iterative Search) ---
     current_iteration = 0
     while len(final_playlist) < MINIMUM_PLAYLIST_SIZE and current_iteration < MAX_FILLER_ITERATIONS:
         current_iteration += 1
         needed = MINIMUM_PLAYLIST_SIZE - len(final_playlist)
         logging.warning(f"Playlist too short. Starting Filler Iteration {current_iteration}/{MAX_FILLER_ITERATIONS}. Need {needed} more.")
 
-        # 1. เลือก Seed: ถ้ามีเพลงใน `final_playlist` แล้ว ให้ใช้เพลงนั้นเป็น Seed
-        # ถ้ายังไม่มี (รอบแรกเฟล) ให้ใช้ `top_tracks_list` เป็น Seed
-        if final_playlist:
-            seed_tracks_for_filler = final_playlist[:5] # ใช้ 5 เพลงที่ดีที่สุดที่เพิ่งหาเจอ
-        else:
-            seed_tracks_for_filler = top_tracks_list[:5] # ใช้ Top tracks ของ User
+        # --- [ FIX 3: แก้ไข Logic การเลือก Seed ตามที่คุณแนะนำ ] ---
+        # 1. "บ่อ" ที่จะสุ่มคือ Top Tracks 10 เพลงของ User เสมอ
+        #    เพื่อป้องกันการ "เอนเอียง" และให้โอกาสเพลงสาย Idol
+        seed_source_list = top_tracks_list
+        
+        # 2. สุ่มหยิบ Seed 5 เพลง (หรือน้อยกว่าถ้ามีไม่ถึง 5)
+        num_seeds_to_pick = min(len(seed_source_list), 5)
+        seed_tracks_for_filler = random.sample(seed_source_list, num_seeds_to_pick)
+        
+        logging.info(f"Using RANDOMIZED Top-Tracks seeds for filler: {[t['name'] for t in seed_tracks_for_filler]}")
+        # --- [ จบ FIX 3 ] ---
 
-        # 2. หา Candidates ใหม่
         filler_candidates_info = []
         try:
-            # ใช้ Seed ที่ดีที่สุดไปหาเพลงคล้ายๆ กันใน Last.fm
-            lastfm_similar = await get_similar_tracks(seed_tracks_for_filler[0]['artists'][0]['name'], seed_tracks_for_filler[0]['name'], limit=20)
+            # (แก้บั๊ก: สุ่มเพลง 1 เพลงจาก Seed ที่สุ่มมาอีกที เพื่อใช้กับ Last.fm)
+            random_seed_for_lastfm = random.choice(seed_tracks_for_filler)
+            lastfm_similar = await get_similar_tracks(random_seed_for_lastfm['artists'][0]['name'], random_seed_for_lastfm['name'], limit=20)
             if lastfm_similar: filler_candidates_info.extend(lastfm_similar)
         except Exception as e: logging.error(f"Filler Iteration {current_iteration}: Last.fm similar failed: {e}")
 
         if len(filler_candidates_info) < needed:
             try:
-                # ถ้ายังไม่พอ ให้ Gemini ช่วยหาเพลงเติม (โดยบอกภาษาที่ต้องการไปด้วย)
-                gemini_candidates = await get_filler_tracks_with_lyrics(seed_tracks_for_filler, guardrail_language) # <--- ส่ง guardrail_language เข้าไป
+                # (ส่ง Seed ที่สุ่มมาทั้งหมด 5 เพลงไปให้ Gemini)
+                gemini_candidates = await get_filler_tracks_with_lyrics(seed_tracks_for_filler, guardrail_language)
                 if gemini_candidates: filler_candidates_info.extend(gemini_candidates)
             except Exception as e: logging.error(f"Filler Iteration {current_iteration}: Gemini filler failed: {e}")
 
         if not filler_candidates_info:
             logging.error(f"Filler Iteration {current_iteration}: No new candidates found. Stopping loop.")
-            break # ออกจาก Loop ถ้าหาเพลงใหม่ไม่ได้แล้ว
+            break 
 
-        # 3. วิเคราะห์และให้คะแนน Candidates ชุดใหม่
-        # (เราต้องสร้างฟังก์ชัน _analyze_single_track ใหม่ที่นี่ โดยใช้ LOOSE_SCORE_THRESHOLD)
-        
-        analysis_results.clear() # ล้างผลลัพธ์เก่า
+        analysis_results.clear()
         filler_analysis_tasks = [_analyze_single_track(info, master_blacklist) for info in filler_candidates_info]
-        await asyncio.gather(*filler_analysis_tasks)
+        
+        await asyncio.gather(*filler_analysis_tasks) # (FIX 1)
         
         logging.info(f"Filler Iteration {current_iteration}: Analyzed {len(analysis_results)} new tracks.")
 
@@ -601,7 +570,6 @@ async def get_intelligent_recommendations(
             spotify_track = result["track_object"]
             song_fingerprint = result["moods"]
 
-            # คำนวณคะแนน (เหมือนเดิม)
             stylistic_score = calculate_cosine_similarity(stylistic_profile, song_fingerprint)
             if has_target_emotion:
                 emotional_score = calculate_cosine_similarity(emotional_profile, song_fingerprint)
@@ -611,16 +579,14 @@ async def get_intelligent_recommendations(
             
             spotify_track['ai_analysis'] = {"mood_score": float(final_score)}
 
-            # (*** แก้ไข: ใช้เกณฑ์ LOOSE_SCORE_THRESHOLD ที่นี่ ***)
             if final_score >= LOOSE_SCORE_THRESHOLD:
                 new_filler_songs.append(spotify_track)
-                master_blacklist.add(uri) # เพิ่มเข้า Blacklist ป้องกันการวนซ้ำ
+                master_blacklist.add(uri) 
 
         if not new_filler_songs:
             logging.warning(f"Filler Iteration {current_iteration}: No new songs passed loose filter. Stopping.")
-            break # ออกจาก Loop ถ้าไม่มีเพลงไหนผ่านเกณฑ์เลย
+            break 
 
-        # 4. เพิ่มเพลงใหม่เข้า Playlist
         new_filler_songs.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
         final_playlist.extend(new_filler_songs)
         logging.info(f"Filler Iteration {current_iteration}: Added {len(new_filler_songs)} songs. Total now: {len(final_playlist)}")
@@ -629,12 +595,11 @@ async def get_intelligent_recommendations(
     
     # (Part 7: Finalizing)
     if not final_playlist:
-        # ถ้า Loop 3 รอบแล้วยังไม่มีอะไรเลย
         logging.error("All recommendation iterations failed. Returning final fallback.")
         return await get_fallback_recommendations(sp_client)
 
     final_playlist.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
-    final_playlist = final_playlist[:15] # ตัดให้เหลือ 15 เพลง
+    final_playlist = final_playlist[:15] 
     
     if final_playlist:
         await save_recommendation_history(user_id, [t['uri'] for t in final_playlist])
