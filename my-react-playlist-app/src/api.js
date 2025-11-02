@@ -1,4 +1,5 @@
 // src/api.js
+// (คัดลอกทั้งไฟล์ไปวางทับ หรือเพิ่มเฉพาะฟังก์ชันใหม่ก็ได้ครับ)
 
 /**
  * A helper function to get the authentication headers from local storage.
@@ -142,7 +143,6 @@ export const createSpotifyPlaylist = async (playlistName, trackUris) => {
     return response.json();
 };
 
-// --- NEW FUNCTION ---
 /**
  * Sends a request to delete a pinned playlist.
  * @param {number} pinId - The ID of the pinned playlist.
@@ -158,7 +158,6 @@ export const deletePinnedPlaylist = async (pinId) => {
   return { success: true };
 };
 
-// --- NEW FUNCTION ---
 /**
  * Sends a request to update a pinned playlist's name.
  * @param {number} pinId - The ID of the pinned playlist.
@@ -178,4 +177,41 @@ export const updatePinnedPlaylist = async (pinId, newName, songs) => {
     throw new Error('Failed to update playlist');
   }
   return { success: true };
+};
+
+/**
+ * Fetches an AI summary for a list of song URIs.
+ * @param {Array<string>} songUris - A list of Spotify track URIs.
+ * @returns {Promise<object>} - The summary data.
+ */
+export const summarizePlaylist = async (songUris) => {
+  const response = await fetch('/summarize_playlist', {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ song_uris: songUris })
+  });
+  if (!response.ok) {
+    throw new Error('Failed to summarize playlist');
+  }
+  return response.json(); // ควรจะคืนค่า { "summary": "..." }
+};
+
+// --- (*** ใหม่ ***) ---
+/**
+ * Fetches dynamic suggested prompts based on user's taste.
+ * @returns {Promise<object>} - An object { prompts: [...] }
+ */
+export const fetchSuggestedPrompts = async () => {
+  try {
+    const headers = getAuthHeaders();
+    const response = await fetch('/suggested_prompts', { headers });
+    if (!response.ok) {
+      throw new Error('Could not fetch suggestions');
+    }
+    return response.json();
+  } catch (error) {
+    // ถ้า fetch ไม่ได้ (เช่น 401) ให้คืนค่า default
+    console.warn("Could not fetch dynamic prompts, using default.", error.message);
+    return { prompts: [ '🎵 แนะนำเพลงส่วนตัวให้หน่อย', '📈 ขอเพลงฮิตติดชาร์ต', '🎧 หาเพลงเศร้าๆ' ] };
+  }
 };

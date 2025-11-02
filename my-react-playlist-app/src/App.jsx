@@ -4,9 +4,12 @@ import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
 import LoadingOverlay from './components/LoadingOverlay';
 import SongDetailModal from './components/SongDetailModal';
+import RenameModal from './components/RenameModal';
+import ConfirmModal from './components/ConfirmModal';
 
 function App() {
   const {
+    // Core
     sidebarOpen, setSidebarOpen,
     chatHistory,
     userInput, setUserInput,
@@ -14,20 +17,38 @@ function App() {
     currentTheme, handleToggleTheme,
     currentRecommendedSongs,
     pinnedPlaylists,
-    showSongModal, setShowSongModal,
-    modalSong,
-    modalAnalysis,
+    
+    // User
     userInfo,
     handleSpotifyLogin,
     handleSpotifyLogout,
+    
+    // Actions
     sendMessageToBackend,
     handleCreatePlaylist,
     handleShowDetails,
     handleFeedback,
     handlePinClick,
     displayPlaylistFromHistory,
-    handleDeletePinnedPlaylist, // <-- Get new function from context
-    handleUpdatePlaylistName   // <-- Get new function from context
+    handleSummarizePlaylist,
+    suggestedPrompts, // <-- ดึง Prompts
+    
+    // Modals
+    handleDeletePinnedPlaylist,
+    isRenameModalOpen,
+    isSubmitting,
+    playlistToRename,
+    handleOpenRenameModal,
+    handleCloseRenameModal,
+    handleSubmitRename,
+    isConfirmModalOpen,
+    playlistToDelete,
+    handleCloseConfirmModal,
+    handleSubmitDelete,
+    showSongModal, setShowSongModal,
+    modalSong,
+    modalAnalysis,
+    
   } = useAppContext();
 
   return (
@@ -40,8 +61,8 @@ function App() {
         onLogout={handleSpotifyLogout}
         pinnedPlaylists={pinnedPlaylists}
         onSelectPinned={displayPlaylistFromHistory}
-        onDeletePinned={handleDeletePinnedPlaylist} // <-- Pass prop to Sidebar
-        onUpdatePinned={handleUpdatePlaylistName}   // <-- Pass prop to Sidebar
+        onDeletePinned={handleDeletePinnedPlaylist} 
+        onUpdatePinned={handleOpenRenameModal}     
         currentTheme={currentTheme}
         onToggleTheme={handleToggleTheme}
       />
@@ -50,14 +71,35 @@ function App() {
         onFeedback={handleFeedback}
         onShowDetails={handleShowDetails}
         onPin={handlePinClick}
+        onSummarize={handleSummarizePlaylist}
         onOpenSidebar={() => setSidebarOpen(true)}
         currentRecommendedSongs={currentRecommendedSongs}
         onCreatePlaylist={handleCreatePlaylist}
         userInput={userInput}
         onUserInputChange={(e) => setUserInput(e.target.value)}
         onSendMessage={sendMessageToBackend}
+        suggestedPrompts={suggestedPrompts} // <-- ส่ง Prompts
       />
-      {isFetching && <LoadingOverlay />}
+      
+      {/* --- Modals --- */}
+      <ConfirmModal
+        isOpen={isConfirmModalOpen}
+        playlistName={playlistToDelete?.name || ''}
+        onClose={handleCloseConfirmModal}
+        onConfirm={handleSubmitDelete}
+        isLoading={isSubmitting}
+      />
+      
+      <RenameModal
+        isOpen={isRenameModalOpen}
+        currentName={playlistToRename?.name || ''}
+        onClose={handleCloseRenameModal}
+        onRename={handleSubmitRename}
+        isLoading={isSubmitting}
+      />
+      
+      {(isFetching || isSubmitting) && <LoadingOverlay />}
+
       {showSongModal && (
         <SongDetailModal
           song={modalSong}

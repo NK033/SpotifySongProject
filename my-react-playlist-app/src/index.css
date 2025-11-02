@@ -1,27 +1,36 @@
 /*
-  This file contains only your custom CSS.
-  The Tailwind directives (@tailwind base, etc.) are removed
-  because the CDN script in index.html handles them.
+  my-react-playlist-app/src/index.css
+  (เวอร์ชันอัปเกรด กราฟิก)
 */
 
 body {
   font-family: 'Sarabun', sans-serif;
+  overflow: hidden; /* ป้องกันการ scroll หน้าหลัก */
 }
 
+/* --- 🎨 ธีมหลัก (Glassmorphism Dark) --- */
 .dark-theme {
-  --bg-primary: #0d1117;
-  --bg-secondary: #1a202c;
-  --text-primary: #e2e8f0;
-  --border-color: #2d3748;
-  --chat-bubble-ai: #2d3748;
+  --bg-primary: #0d1117; /* พื้นหลังหลัก (เกือบดำ) */
+  --bg-secondary: rgba(26, 32, 44, 0.95); 
+  --bg-glass: rgba(255, 255, 255, 0.05);
+  --text-primary: #e2e8f0; /* ตัวอักษรหลัก (ขาวนวล) */
+  --text-secondary: #a0aec0; /* ตัวอักษรรอง (เทา) */
+  --border-color: rgba(255, 255, 255, 0.1); /* เส้นขอบ (ขาว-โปร่งแสง) */
+  --chat-bubble-ai: #2d3748; /* สีช่องแชท AI */
+  --gradient-start: #1DB954; /* เขียว Spotify */
+  --gradient-end: #1a9cff; /* ฟ้าสดใส */
 }
 
 .light-theme {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f3f4f6;
-  --text-primary: #1f2937;
-  --border-color: #d1d5db;
-  --chat-bubble-ai: #e5e7eb;
+  --bg-primary: #f0f2f5; /* พื้นหลังหลัก (เทาอ่อน) */
+  --bg-secondary: rgba(255, 255, 255, 0.95); 
+  --bg-glass: rgba(255, 255, 255, 0.3);
+  --text-primary: #1a202c; /* ตัวอักษรหลัก (ดำ) */
+  --text-secondary: #4a5568; /* ตัวอักษรรอง (เทาเข้ม) */
+  --border-color: rgba(0, 0, 0, 0.1); /* เส้นขอบ (ดำ-โปร่งแสง) */
+  --chat-bubble-ai: #e2e8f0; /* สีช่องแชท AI */
+  --gradient-start: #1DB954;
+  --gradient-end: #1a9cff;
 }
 
 body {
@@ -29,22 +38,56 @@ body {
   color: var(--text-primary);
 }
 
-.song-item-card {
+/* --- 🎨 ตั้งค่า Sidebar/Modals ให้เป็นกระจก --- */
+.bg-secondary {
+  background-color: var(--bg-secondary);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-color: var(--border-color);
 }
 
-.dark-theme .song-item-card {
-  background-color: #1a202c;
+/* --- 🎨 ปุ่มลัดคำสั่ง (Suggested Prompts) --- */
+.suggested-prompt-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 9999px; /* rounded-full */
+  background-color: var(--bg-glass);
+  color: var(--text-secondary);
+  font-size: 0.875rem; /* text-sm */
+  transition: all 0.2s ease-in-out;
+}
+.suggested-prompt-btn:hover {
+  background-color: var(--border-color);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
-.light-theme .song-item-card {
-  background-color: #f9fafb;
+/* --- 🎨 ปุ่มผู้ใช้ (User Bubble) --- */
+.user-chat-bubble {
+  background-image: linear-gradient(to right, var(--gradient-end), var(--gradient-start));
+  color: white;
 }
 
+/* --- Animation (เหมือนเดิม) --- */
 .modal-overlay {
   transition: opacity 0.3s ease;
+  animation: fadeIn 0.3s ease;
 }
-
 .modal-content {
   transition: transform 0.3s ease;
+  animation: fadeInUp 0.3s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }

@@ -15,6 +15,7 @@ export const AppProvider = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState([
     {
+      id: Date.now() + Math.random(), // เพิ่ม ID
       isUser: false,
       message: 'สวัสดีครับ! ผมคือ AI ที่จะช่วยคุณค้นหา วิเคราะห์ และสร้างเพลย์ลิสต์เพลง ลองพิมพ์บอกผมได้เลยครับ',
       songs: null,
@@ -35,9 +36,29 @@ export const AppProvider = ({ children }) => {
     isLoggedIn: false,
   });
 
+  // --- State for Modals ---
+  const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const [playlistToRename, setPlaylistToRename] = useState(null);
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+  const [playlistToDelete, setPlaylistToDelete] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false); // Loading state for modals
+
+  // --- State for Dynamic Prompts ---
+  const [suggestedPrompts, setSuggestedPrompts] = useState([
+    '🎵 แนะนำเพลงส่วนตัวให้หน่อย',
+    '📈 ขอเพลงฮิตติดชาร์ต',
+  ]);
+
   // --- Helper Functions ---
   const addMessageToHistory = (message, isUser, songs = null, recommendationText = '') => {
-    setChatHistory(prev => [...prev, { message, isUser, songs, recommendationText }]);
+    const newItem = {
+      id: Date.now() + Math.random(), // ใช้ ID ที่ unique
+      message,
+      isUser,
+      songs,
+      recommendationText
+    };
+    setChatHistory(prev => [...prev, newItem]);
   };
 
   // --- Core Logic Functions ---
@@ -48,6 +69,12 @@ export const AppProvider = ({ children }) => {
     updateUIForLoginState();
     setPinnedPlaylists([]);
     addMessageToHistory('ออกจากระบบ Spotify แล้ว', false);
+    // Reset prompts to default
+    setSuggestedPrompts([
+      '🎵 แนะนำเพลง J-Pop สนุกๆ',
+      '📈 ขอเพลงฮิตติดชาร์ต',
+      '🎧 หาเพลงเศร้าๆ'
+    ]);
   };
 
   const updateUIForLoginState = () => {
@@ -57,16 +84,19 @@ export const AppProvider = ({ children }) => {
     setUserInfo({ displayName: displayName || 'User', avatar: avatar || 'https://placehold.co/100x100/1DB954/ffffff?text=U', isLoggedIn });
   };
   
-  const sendMessageToBackend = async () => {
-    if (isFetching || userInput.trim() === '') return;
-    const userMessage = userInput.trim();
+  // (แก้ไข) รับ messageOverride เพื่อแก้บั๊กปุ่มลัด
+  const sendMessageToBackend = async (messageOverride = null) => {
+    const userMessage = (messageOverride || userInput).trim();
+    
+    if (isFetching || userMessage === '') return;
+
     addMessageToHistory(userMessage, true);
     setUserInput('');
     setIsFetching(true);
     setCurrentRecommendedSongs([]);
 
     try {
-      const data = await api.postChatMessage(userMessage);
+      const data = await api.postChatMessage(userMessage); 
       const songs = (data.songs_found && data.songs_found.length > 0) ? data.songs_found : [];
       addMessageToHistory(data.response || '', false, songs, data.response);
       if (songs.length > 0) {
@@ -126,28 +156,80 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // --- NEW FUNCTION ---
-  const handleDeletePinnedPlaylist = async (pinId) => {
+  // --- Modal Delete Functions ---
+  const handleDeletePinnedPlaylist = (pinId, name) => {
+    setPlaylistToDelete({ pin_id: pinId, name: name });
+    setIsConfirmModalOpen(true);
+  };
+
+  const handleCloseConfirmModal = () => {
+    setIsConfirmModalOpen(false);
+    setPlaylistToDelete(null);
+  };
+
+  const handleSubmitDelete = async () => {
+    if (!playlistToDelete) return;
+    setIsSubmitting(true);
     try {
-      await api.deletePinnedPlaylist(pinId);
-      await fetchAndRenderPinnedPlaylists(); // Refresh the list
+      await api.deletePinnedPlaylist(playlistToDelete.pin_id);
+      await fetchAndRenderPinnedPlaylists();
+      handleCloseConfirmModal();
     } catch (error) {
       console.error("Delete Pin Error:", error);
       alert('เกิดข้อผิดพลาดในการลบเพลย์ลิสต์');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // --- NEW FUNCTION ---
-  const handleUpdatePlaylistName = async (pinId, newName, songs) => {
+  // --- Modal Rename Functions ---
+  const handleOpenRenameModal = (playlistItem) => {
+    setPlaylistToRename(playlistItem);
+    setIsRenameModalOpen(true);
+  };
+
+  const handleCloseRenameModal = () => {
+    setIsRenameModalOpen(false);
+    setPlaylistToRename(null);
+  };
+  
+  const handleSubmitRename = async (newName) => {
+    if (!playlistToRename) return;
+    setIsSubmitting(true);
     try {
-      await api.updatePinnedPlaylist(pinId, newName, songs);
-      await fetchAndRenderPinnedPlaylists(); // Refresh the list
+      await api.updatePinnedPlaylist(playlistToRename.pin_id, newName, playlistToRename.songs);
+      await fetchAndRenderPinnedPlaylists();
+      handleCloseRenameModal();
     } catch (error) {
       console.error("Update Pin Error:", error);
       alert('เกิดข้อผิดพลาดในการอัปเดตชื่อเพลย์ลิสต์');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  
+  // --- Summarize Function ---
+  const handleSummarizePlaylist = async (item) => {
+    if (!item || !item.songs || item.songs.length === 0) {
+      addMessageToHistory('ขออภัยค่ะ ไม่พบเพลงในรายการนี้ที่จะสรุป', false);
+      return;
+    }
+    setIsFetching(true);
+    try {
+      const songUris = item.songs.map(s => s.uri);
+      const data = await api.summarizePlaylist(songUris);
+      const playlistName = `"${item.message.split('\n')[0]}"`;
+      addMessageToHistory(`นี่คือบทวิเคราะห์ AI สำหรับเพลย์ลิสต์ ${playlistName}:`, false);
+      addMessageToHistory(data.summary, false);
+    } catch (error) {
+      console.error("Summarize Error:", error);
+      addMessageToHistory('ขออภัยค่ะ ไม่สามารถสรุปเพลย์ลิสต์นี้ได้', false);
+    } finally {
+      setIsFetching(false);
     }
   };
 
+  // --- Data Fetching Functions ---
   const fetchAndRenderPinnedPlaylists = async () => {
     try {
       const data = await api.fetchPinnedPlaylists();
@@ -157,8 +239,6 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // --- UPDATED FUNCTION ---
-  // Now finds by pin_id instead of index
   const displayPlaylistFromHistory = (pinId) => {
     const historyItem = pinnedPlaylists.find(p => p.pin_id === pinId);
     if (!historyItem) return;
@@ -178,6 +258,20 @@ export const AppProvider = ({ children }) => {
   }, [currentTheme]);
 
   useEffect(() => {
+    // Function to load dynamic prompts
+    const loadDynamicPrompts = async () => {
+      try {
+        const data = await api.fetchSuggestedPrompts();
+        if (data && data.prompts) {
+          setSuggestedPrompts(data.prompts);
+        }
+      } catch (error) {
+        console.warn("Using default prompts due to error:", error);
+        // (It will keep the default state)
+      }
+    };
+
+    // Main app initialization
     const initializeApp = async () => {
       const urlParams = new URLSearchParams(window.location.search);
       const accessToken = urlParams.get('access_token');
@@ -199,18 +293,21 @@ export const AppProvider = ({ children }) => {
           }
           addMessageToHistory('เข้าสู่ระบบ Spotify สำเร็จแล้ว!', false);
           fetchAndRenderPinnedPlaylists();
+          loadDynamicPrompts(); // <-- Load dynamic prompts
         } catch (error) {
            handleSpotifyLogout();
         }
       } else if (localStorage.getItem('spotify_access_token')) {
+        // User is already logged in
         fetchAndRenderPinnedPlaylists();
+        loadDynamicPrompts(); // <-- Load dynamic prompts
       }
       updateUIForLoginState();
     };
     initializeApp();
-  }, []);
+  }, []); // Run once on mount
 
-  // The value that will be available to all consumer components
+  // --- Context Value ---
   const value = {
     sidebarOpen, setSidebarOpen,
     chatHistory,
@@ -231,8 +328,23 @@ export const AppProvider = ({ children }) => {
     handleFeedback,
     handlePinClick,
     displayPlaylistFromHistory,
-    handleDeletePinnedPlaylist, // <-- ADD THIS
-    handleUpdatePlaylistName,  // <-- ADD THIS
+    handleDeletePinnedPlaylist,
+    
+    // Modals
+    isRenameModalOpen,
+    isSubmitting,
+    playlistToRename,
+    handleOpenRenameModal,
+    handleCloseRenameModal,
+    handleSubmitRename,
+    isConfirmModalOpen,
+    playlistToDelete,
+    handleCloseConfirmModal,
+    handleSubmitDelete,
+
+    // Features
+    handleSummarizePlaylist,
+    suggestedPrompts // <-- Expose prompts
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -6,8 +6,10 @@ import spotipy
 import google.generativeai as genai
 from fastapi import FastAPI, Header, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import RedirectResponse
+
+from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import time
 import logging
@@ -18,9 +20,9 @@ from recommender import get_intelligent_recommendations, update_user_profile_bac
 from gemini_ai import get_song_analysis_details, summarize_playlist
 from pydantic import BaseModel
 from typing import List
-from database import init_db, save_user_feedback, add_pinned_playlist, get_pinned_playlists_by_user
+from database import get_user_mood_profile, init_db, save_user_feedback, add_pinned_playlist, get_pinned_playlists_by_user
 from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest
-from spotify_api import SPOTIFY_SCOPES, create_spotify_client
+from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_user_top_tracks
 from models import UpdatePlaylistRequest
 
 
@@ -53,7 +55,7 @@ Config.validate()
 genai.configure(api_key=Config.GEMINI_API_KEY)
 app = FastAPI()
 
-# --- Model ใหม่สำหรับ Request สร้าง Playlist ---
+# --- Model ใหม่สำหรับ Request สร้าง Playlist ---   
 class CreatePlaylistRequest(BaseModel):
     playlist_name: str
     track_uris: List[str]
@@ -64,9 +66,6 @@ class SummarizePlaylistRequest(BaseModel):
 
 # --- Middleware, Frontend, DB init ---
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
-@app.get("/", response_class=FileResponse)
-async def read_index(): return "index.html"
 
 @app.on_event("startup")
 async def startup_event(): await init_db()
@@ -420,3 +419,64 @@ async def update_pinned_playlist_endpoint(pin_id: int, req: UpdatePlaylistReques
     except Exception as e:
         logging.error(f"ERROR updating pinned playlist: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/suggested_prompts")
+async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+    except HTTPException:
+        # ถ้ายังไม่ล็อกอิน ให้ส่งค่า default กลับไป
+        default_prompts = [
+            '🎵 แนะนำเพลงสบายๆ',
+            '📈 ขอเพลงฮิตติดชาร์ต',
+            '🎧 หาเพลงเศร้าๆ',
+            '🏃‍♂️ หาเพลงสำหรับวิ่ง'
+        ]
+        return JSONResponse({"prompts": default_prompts})
+
+    prompts = []
+    
+    # 1. Prompt แนะนำเพลงส่วนตัว (ต้องมีเสมอ)
+    prompts.append('🎵 แนะนำเพลงส่วนตัวให้หน่อย')
+    prompts.append('📈 ขอเพลงฮิตติดชาร์ต')
+
+    try:
+        # 2. Prompt จากศิลปินโปรด
+        top_tracks = await get_user_top_tracks(sp_client, limit=1)
+        if top_tracks and top_tracks[0]['artists']:
+            top_artist_name = top_tracks[0]['artists'][0]['name']
+            prompts.append(f'🎧 หาเพลงสไตล์ {top_artist_name}')
+
+        # 3. Prompt จากอารมณ์โปรด (จาก Mood Profile)
+        mood_profile = await get_user_mood_profile(user_id)
+        if mood_profile:
+            # ค้นหาอารมณ์ที่มีค่าน้ำหนักสูงสุด (ไม่เอา neutral)
+            mood_profile.pop('neutral', None) 
+            top_mood = max(mood_profile, key=mood_profile.get)
+            
+            # แปลงชื่ออารมณ์เป็น Prompt ภาษาไทย
+            mood_map = {
+                'joy': '🎉 หาเพลงสนุกๆ',
+                'excitement': '🔥 หาเพลงมันส์ๆ',
+                'sadness': '😢 หาเพลงเศร้าๆ',
+                'love': '❤️ หาเพลงรักโรแมนติก',
+                'anger': '😡 หาเพลงดุๆ',
+                'fear': '😱 หาเพลงแนวลึกลับ',
+                'optimism': '✨ หาเพลงให้กำลังใจ'
+            }
+            if top_mood in mood_map:
+                prompts.append(mood_map[top_mood])
+            else:
+                prompts.append('💖 หาเพลงตามอารมณ์ฉัน')
+
+        # ทำให้เหลือไม่เกิน 4 prompts
+        return JSONResponse({"prompts": prompts[:4]})
+        
+    except Exception as e:
+        logging.error(f"Error generating dynamic prompts: {e}")
+        # ถ้าเกิด Error ระหว่างหาข้อมูลส่วนตัว ก็ส่ง default กลับไป
+        return JSONResponse({"prompts": [ '🎵 แนะนำเพลงส่วนตัวให้หน่อย', '📈 ขอเพลงฮิตติดชาร์ต' ]})
+    
+
+app.mount("/", StaticFiles(directory="my-react-playlist-app/dist", html=True), name="static-react-app")
