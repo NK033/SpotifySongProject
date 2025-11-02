@@ -1,11 +1,11 @@
-# gemini_ai.py
+# gemini_ai.py (FIXED V3 - Added JSON Sanitizer)
 import logging
 import google.generativeai as genai
 import json
 import asyncio
 import spotipy
 from fastapi import HTTPException, status
-from sympy import re
+import re # (Import 're' ที่ถูกต้อง)
 from database import save_song_analysis_to_db, get_song_analysis_from_db
 from genius_api import get_lyrics
 from custom_model import predict_moods
@@ -23,10 +23,23 @@ JSON_MODEL = genai.GenerativeModel(
 )
 # =======================================
 
+# --- [ ใหม่: ฟังก์ชันฆ่าเชื้อ ] ---
+def _sanitize_json_string(json_str: str) -> str:
+    """
+    พยายามแก้ไขอักขระ \ (backslash) ที่ผิดพลาดซึ่ง Gemini สร้างขึ้น
+    """
+    # นี่คือการแทนที่ \ ที่ *ไม่ได้* ตามด้วยอักขระ escape ที่ถูกต้อง (เช่น \n, \t, \\, \")
+    # ด้วย \\ (backslash สองตัว)
+    try:
+        return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', json_str)
+    except Exception:
+        # ถ้า regex ล้มเหลว ให้คืนค่าเดิม
+        return json_str
+# --- [ จบฟังก์ชันใหม่ ] ---
+
+
 async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
-    """
-    (V-Final) วิเคราะห์เพลงด้วย Gemini และให้ 'บทสรุปที่กระชับ' แทนการวิเคราะห์ยาวๆ
-    """
+    # (ฟังก์ชันนี้ไม่ได้รับผลกระทบ เพราะใช้ TEXT_MODEL)
     logging.info(f"Analyzing '{spotify_track_data.get('name')}' for a concise summary...")
     artist_name = spotify_track_data.get('artists', [{}])[0].get('name', 'N/A')
     song_title = spotify_track_data.get('name', 'N/A')
@@ -56,9 +69,7 @@ async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error analyzing song with Gemini API.")
 
 async def get_song_analysis_details(sp_client: spotipy.Spotify, song_uri: str) -> dict:
-    """
-    ดึงข้อมูลการวิเคราะห์เพลงจาก DB หรือวิเคราะห์ใหม่ถ้ายังไม่มี
-    """
+    # (ฟังก์ชันนี้ไม่ได้รับผลกระทบ)
     analysis_data = await get_song_analysis_from_db(song_uri)
     if analysis_data:
         return analysis_data
@@ -70,12 +81,10 @@ async def get_song_analysis_details(sp_client: spotipy.Spotify, song_uri: str) -
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get song details: {e}")
 
 async def summarize_playlist(sp_client: spotipy.Spotify, song_uris: list[str]) -> str:
-    """
-    (V-Final) ให้ Gemini สรุปภาพรวมของ Playlist อย่างชาญฉลาด
-    """
+    # (ฟังก์ชันนี้ไม่ได้รับผลกระทบ เพราะใช้ TEXT_MODEL)
     tasks = [get_song_analysis_details(sp_client, uri) for uri in song_uris]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-
+    # ... (โค้ดที่เหลือเหมือนเดิม) ...
     valid_analyses = [res for res in results if not isinstance(res, Exception)]
 
     prompt = "นี่คือข้อมูลการวิเคราะห์ของแต่ละเพลงในเพลย์ลิสต์:\n\n"
@@ -103,14 +112,12 @@ async def summarize_playlist(sp_client: spotipy.Spotify, song_uris: list[str]) -
         logging.error(f"Error calling Gemini API for playlist summary: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error summarizing playlist.")
 
+
 async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -> list[dict]:
-    """
-    (V3 - Lyrics-Rich) ขยายฐานเพลงโดยอิงจาก "สไตล์" และ "ธีม"
-    และ "บังคับ" ให้ส่งเหตุผล (lyrics_summary) กลับมาด้วย
-    """
+    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     if not top_tracks:
         return []
-
+    # ... (โค้ดสร้าง prompt เหมือนเดิม) ...
     logging.info(f"Starting Gemini Seed Expansion (V3 - Lyrics-Rich) for request: '{user_message}'")
 
     seed_data = []
@@ -121,7 +128,6 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
                 "title": track['name']
             })
 
-    # --- (ส่วน "ธีม" เหมือนเดิม) ---
     generic_requests_th = ["แนะนำเพลง", "เพลงแนะนำ", "ขอเพลงหน่อย", "หาเพลง"]
     generic_requests_en = ["recommend", "suggest", "find me songs"]
     is_generic_request = False
@@ -134,7 +140,6 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         theme_context = "The user has made a general request. Focus ONLY on their listening style."
     else:
         theme_context = f"IMPORTANT: The user has a specific request right now. They want songs that fit this theme: '{user_message}'. The suggestions MUST match this theme."
-    # --- (จบส่วน "ธีม") ---
 
     prompt = f"""
     You are an AI music expert.
@@ -163,10 +168,12 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
             logging.error(f"Gemini (Lyrics-Rich) returned no JSON List. Raw: {json_text}")
             return []
             
-        json_data = json.loads(json_match.group(0))
+        # --- [ FIX: ใช้ Sanitizer ] ---
+        sanitized_json_string = _sanitize_json_string(json_match.group(0))
+        json_data = json.loads(sanitized_json_string)
+        # --- [ จบ FIX ] ---
         
         if isinstance(json_data, list):
-            # (เพิ่ม) กรองเอาเฉพาะเพลงที่มี 'lyrics_summary' จริงๆ
             valid_candidates = [
                 track for track in json_data 
                 if track.get("artist") and track.get("title") and track.get("lyrics_summary")
@@ -182,38 +189,28 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         return []
 
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
-    """
-    (V4 - Rate Limit Proof) Finds lyrics in safe batches to prevent 429 errors.
-    """
+    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     if not failed_tracks: 
         return {}
-        
+    # ... (โค้ด Batching loop เหมือนเดิม) ...
     logging.info(f"--- Activating Gemini Lyric Finder (Rate-Limit Proof V4) for {len(failed_tracks)} tracks... ---")
-
-    # --- THIS IS THE FIX ---
-    # Define a safe batch size and a delay
-    BATCH_SIZE = 5  # 5 requests per prompt is very safe
-    DELAY_BETWEEN_BATCHES = 5  # 5 seconds delay
-    
+    BATCH_SIZE = 5
+    DELAY_BETWEEN_BATCHES = 5
     all_rescued_data = {}
     
-    # Process the failed tracks in small, safe batches
     for i in range(0, len(failed_tracks), BATCH_SIZE):
         batch_tracks = failed_tracks[i:i + BATCH_SIZE]
         logging.info(f"--- Processing batch {i//BATCH_SIZE + 1}/{len(failed_tracks)//BATCH_SIZE + 1} ---")
 
-        # Step 1: Create a list of tracks with safe IDs and a map
+        # ... (โค้ดสร้าง tracks_for_prompt และ id_to_key_map เหมือนเดิม) ...
         tracks_for_prompt = []
         id_to_key_map = {}
-        
         for j, track in enumerate(batch_tracks):
             artist = track.get('artists', [{}])[0].get('name', 'N/A')
             title = track.get('name', 'N/A')
             track_key = f"{artist} - {title}"
             track_id = f"track_{j+1}"
-            
             id_to_key_map[track_id] = track_key
-            
             tracks_for_prompt.append({
                 "id": track_id,
                 "artist": artist,
@@ -223,7 +220,6 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
                 "spotify_url": track.get('external_urls', {}).get('spotify')
             })
 
-        # Step 2: Create the prompt for this batch
         prompt = f"""
         You are an expert, multilingual lyric search engine. Find the full, accurate lyrics for the songs in this JSON: {json.dumps(tracks_for_prompt, ensure_ascii=False)}.
 
@@ -241,11 +237,20 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
         """
         
         try:
-            # Step 3: Call the API for this batch
             response = await JSON_MODEL.generate_content_async(prompt)
-            api_response_data = json.loads(response.text)
+            json_text = response.text.strip() 
 
-            # Step 4: Map the results back
+            json_match = re.search(r'\{.*\S.*\}', json_text, re.DOTALL)
+            
+            if not json_match:
+                logging.error(f"❌ Gemini (Lyric Finder) returned no JSON object. Raw: {json_text}")
+                continue 
+
+            # --- [ FIX: ใช้ Sanitizer ] ---
+            sanitized_json_string = _sanitize_json_string(json_match.group(0))
+            api_response_data = json.loads(sanitized_json_string)
+            # --- [ จบ FIX ] ---
+
             if isinstance(api_response_data, dict):
                 for track_id, lyrics in api_response_data.items():
                     if track_id in id_to_key_map:
@@ -256,33 +261,36 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
 
         except Exception as e:
             logging.error(f"❌ Error during Gemini Lyric Finder batch: {e}", exc_info=True)
-            # If one batch fails, log it and continue to the next
             pass 
 
-        # Step 5: Wait before processing the next batch to avoid rate limits
         if i + BATCH_SIZE < len(failed_tracks):
             logging.info(f"--- Waiting {DELAY_BETWEEN_BATCHES}s before next batch... ---")
             await asyncio.sleep(DELAY_BETWEEN_BATCHES)
 
-    # --- End of batch processing ---
-    
     found_count = sum(1 for lyric in all_rescued_data.values() if lyric)
     logging.info(f"✅ Gemini Lyric Finder (V4) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
     return all_rescued_data
     
 
-async def get_filler_tracks_with_lyrics(existing_tracks: list[dict]) -> list[dict]:
-    """
-    (V8) Recommends songs to complete a short playlist.
-    """
+async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardrail: str) -> list[dict]:
+    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     if not existing_tracks: return []
     logging.info("--- Activating Gemini Playlist Filler... ---")
     track_list_str = "\n".join([f"- '{t['name']}' by {t['artists'][0]['name']}" for t in existing_tracks])
-
+    
+    # (เพิ่ม lang_guardrail เข้าไปใน Prompt)
     prompt = f"""
     This playlist is too short:
     {track_list_str}
-    Recommend up to 20 more songs that perfectly match the existing songs' genre, language, and emotional vibe.
+
+    **CRITICAL INSTRUCTION:**
+    All recommended songs MUST be in the same language as the seed tracks.
+    The required language code is: '{lang_guardrail}'.
+    (Example: 'cjk' means Japanese/Korean, 'latin' means English/Spanish, 'th' means Thai).
+    DO NOT suggest songs in other languages.
+
+    Recommend up to 20 more songs that match the genre, language, and emotional vibe.
+    
     **Response Format Requirement (Crucial):**
     - Respond with a JSON object containing a single key "filler_tracks".
     - The value must be a list of objects, each with three keys: "artist", "track", and "lyrics_summary".
@@ -290,7 +298,19 @@ async def get_filler_tracks_with_lyrics(existing_tracks: list[dict]) -> list[dic
     """
     try:
         response = await JSON_MODEL.generate_content_async(prompt)
-        data = json.loads(response.text)
+        json_text = response.text.strip() # 1. เอาข้อความดิบออกมาก่อน
+
+        # 2. [FIX] ค้นหา { ... } ที่เป็น JSON object
+        json_match = re.search(r'\{.*\S.*\}', json_text, re.DOTALL)
+        
+        if not json_match:
+            logging.error(f"❌ Gemini (Filler) returned no JSON object. Raw: {json_text}")
+            return []
+
+        # 3. [FIX] ฆ่าเชื้อ
+        sanitized_json_string = _sanitize_json_string(json_match.group(0))
+        data = json.loads(sanitized_json_string)
+        
         filler_tracks = data.get("filler_tracks", [])
         logging.info(f"✅ Gemini Filler found {len(filler_tracks)} emergency candidates.")
         return filler_tracks
@@ -299,13 +319,9 @@ async def get_filler_tracks_with_lyrics(existing_tracks: list[dict]) -> list[dic
         return []
 
 async def get_emotional_profile_from_gemini(user_message: str) -> dict:
-    """
-    (NEW) ใช้ Gemini (ตัวฉลาด) เพื่อ "แปล" คำขอนามธรรม
-    ให้อยู่ใน 8 อารมณ์ที่โมเดล 'predict_moods' เข้าใจ
-    """
+    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     logging.info(f"Using Gemini to translate abstract request: '{user_message}'")
     
-    # รายการอารมณ์ 8 อย่างที่โมเดล 'predict_moods' ของเรารู้จัก
     EMOTION_LABELS = "['joy', 'sadness', 'anger', 'fear', 'excitement', 'love', 'optimism', 'neutral']"
 
     prompt = f"""
@@ -343,9 +359,12 @@ async def get_emotional_profile_from_gemini(user_message: str) -> dict:
         json_match = re.search(r'\{.*\}', json_text, re.DOTALL)
         if not json_match:
             logging.error(f"Gemini (Translator) returned no JSON. Raw: {json_text}")
-            return {} # คืนค่าว่างถ้าล้มเหลว
+            return {}
             
-        json_data = json.loads(json_match.group(0))
+        # --- [ FIX: ใช้ Sanitizer ] ---
+        sanitized_json_string = _sanitize_json_string(json_match.group(0))
+        json_data = json.loads(sanitized_json_string)
+        # --- [ จบ FIX ] ---
         
         if isinstance(json_data, dict):
             logging.info(f"Gemini (Translator) successful. Profile: {json_data}")

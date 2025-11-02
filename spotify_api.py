@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 import asyncio
 import random
 import time
+import requests
 
 from config import Config
 
@@ -59,7 +60,14 @@ def create_spotify_client(token_info: dict) -> spotipy.Spotify:
         scope=SPOTIFY_SCOPES,
         cache_handler=cache_handler
     )
-    sp_client = spotipy.Spotify(auth_manager=auth_manager)
+    # --- [ FIX 2: สำหรับแก้ 404 Error ] ---
+    # สร้าง Session ใหม่และบังคับให้ "ไม่ใช้" Proxy ของระบบ
+    session = requests.Session()
+    session.proxies = {"http": None, "https": None}
+    # --- [ จบ FIX 2 ] ---
+
+    # ส่ง Session ที่ไม่ใช้ Proxy นี้เข้าไปใน Spotipy
+    sp_client = spotipy.Spotify(auth_manager=auth_manager, session=session)
     return sp_client
 
 # --- ฟังก์ชันที่เรียกใช้ Spotify API ---

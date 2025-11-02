@@ -252,6 +252,16 @@ async def chat_endpoint(
             intent_response = await intent_model.generate_content_async(intent_prompt)
             intent = intent_response.text.strip().casefold()
             logging.info(f"User Intent (Classified by AI): '{intent}'")
+
+            intent_map = {
+                "1": "get_recommendations",
+                "2": "get_top_charts",
+                "3": "use_a_tool",
+                "4": "chat"
+            }
+            if intent in intent_map:
+                intent = intent_map[intent]
+                logging.info(f"AI returned a number. Translated intent to: '{intent}'")
         # --- (จบ Intent Classification) ---
         
 
@@ -403,24 +413,30 @@ async def chat_endpoint(
             
             # (ส่ง tool_definitions ที่แก้ไขแล้วเข้าไป)
             tool_response = await tool_model.generate_content_async(tool_prompt, tools=[tool_definitions])
-            
+                    
             response_payload = {}
-            
+                    
             if (tool_response.candidates and tool_response.candidates[0].content.parts[0].function_call):
                 function_call = tool_response.candidates[0].content.parts[0].function_call
                 tool_name, tool_args = function_call.name, {k: v for k, v in function_call.args.items()}
                 logging.info(f"AI requested to call tool '{tool_name}' with args: {tool_args}")
-                
+                        
                 if tool_name == "search_spotify_songs":
                     result = await search_spotify_songs(sp_client, **tool_args)
                     response_payload = {"response": "นี่คือผลการค้นหาค่ะ", "songs_found": result}
                 elif tool_name == "create_spotify_playlist":
                     result = await create_spotify_playlist(sp_client, **tool_args)
                     response_payload = {"response": f"สร้างเพลย์ลิสต์ '{result['name']}' ให้เรียบร้อยแล้วค่ะ", "playlist_info": result}
+                else:
+                            # --- [ เพิ่มส่วนนี้ ] ---
+                    logging.warning(f"AI called an unknown or unhandled tool: {tool_name}. Falling back to chat.")
+                    intent = "chat" 
+                            # -----------------------
+
             else:
                 logging.warning(f"AI failed to call a tool for: '{user_message}'. Falling back to chat.")
                 intent = "chat"
-            
+                    
             if intent == "use_a_tool":
                 return ChatResponse(**response_payload)
         

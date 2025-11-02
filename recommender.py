@@ -578,8 +578,8 @@ async def get_intelligent_recommendations(
 
         if len(filler_candidates_info) < needed:
             try:
-                # ถ้ายังไม่พอ ให้ Gemini ช่วยหาเพลงเติม
-                gemini_candidates = await get_filler_tracks_with_lyrics(seed_tracks_for_filler)
+                # ถ้ายังไม่พอ ให้ Gemini ช่วยหาเพลงเติม (โดยบอกภาษาที่ต้องการไปด้วย)
+                gemini_candidates = await get_filler_tracks_with_lyrics(seed_tracks_for_filler, guardrail_language) # <--- ส่ง guardrail_language เข้าไป
                 if gemini_candidates: filler_candidates_info.extend(gemini_candidates)
             except Exception as e: logging.error(f"Filler Iteration {current_iteration}: Gemini filler failed: {e}")
 
