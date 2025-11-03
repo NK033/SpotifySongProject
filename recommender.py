@@ -329,10 +329,17 @@ async def get_intelligent_recommendations(
 
     logging.info("--- Initializing V19: Iterative Curation Loop (Gemini Expansion & Batch Lyrics) ---")
 
-    # (Part 1: Blacklist)
+    # (Part 1: Check for Cold Start)
     top_tracks_list = await get_user_top_tracks(sp_client, limit=10)
     if not top_tracks_list:
-        return await get_fallback_recommendations(sp_client)
+        logging.warning("Cold start detected: No top tracks found for user.")
+        fallback_tracks = await get_fallback_recommendations(sp_client)
+        if fallback_tracks:
+            logging.info("Successfully retrieved fallback recommendations for cold start.")
+            return fallback_tracks
+        else:
+            logging.error("Fallback recommendations also failed. Cold start failed completely.")
+            return []
     user_seed_tracks = await get_seed_tracks(sp_client)
     
     guardrail_language, dominant_language_for_prompting = await _determine_language_guardrail(sp_client, user_seed_tracks)
