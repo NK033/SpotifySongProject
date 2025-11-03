@@ -225,17 +225,24 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         return []
 
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
-    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     if not failed_tracks: 
         return {}
     logging.info(f"--- Activating Gemini Lyric Finder (Rate-Limit Proof V4) for {len(failed_tracks)} tracks... ---")
     BATCH_SIZE = 5
-    DELAY_BETWEEN_BATCHES = 5
+    
+    # --- [ THE FIX (User Request) ] ---
+    # ลองที่ 7 วินาที (จากเดิม 5 วินาที)
+    DELAY_BETWEEN_BATCHES = 7
+    # --- [ END FIX ] ---
+    
     all_rescued_data = {}
+    
+    total_batches = (len(failed_tracks) + BATCH_SIZE - 1) // BATCH_SIZE
     
     for i in range(0, len(failed_tracks), BATCH_SIZE):
         batch_tracks = failed_tracks[i:i + BATCH_SIZE]
-        logging.info(f"--- Processing batch {i//BATCH_SIZE + 1}/{len(failed_tracks)//BATCH_SIZE + 1} ---")
+        current_batch_num = (i // BATCH_SIZE) + 1
+        logging.info(f"--- Processing batch {current_batch_num}/{total_batches} ---")
 
         tracks_for_prompt = []
         id_to_key_map = {}
@@ -280,10 +287,8 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
                 logging.error(f"❌ Gemini (Lyric Finder) returned no JSON object. Raw: {json_text}")
                 continue 
 
-            # --- [ FIX: ใช้ Sanitizer ] ---
             sanitized_json_string = _sanitize_json_string(json_match.group(0))
             api_response_data = json.loads(sanitized_json_string)
-            # --- [ จบ FIX ] ---
 
             if isinstance(api_response_data, dict):
                 for track_id, lyrics in api_response_data.items():
@@ -294,6 +299,7 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
                 logging.error(f"❌ Gemini API returned a {type(api_response_data)} instead of a dict for this batch.")
 
         except Exception as e:
+            # เราจะ log error ไว้ แต่จะปล่อยให้มันทำงาน batch ต่อไป (เผื่อ batch หน้าสำเร็จ)
             logging.error(f"❌ Error during Gemini Lyric Finder batch: {e}", exc_info=True)
             pass 
 

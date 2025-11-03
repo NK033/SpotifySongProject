@@ -234,12 +234,12 @@ def calculate_mood_score(song_moods: list, user_profile: dict) -> float:
 
 async def analyze_and_cache_song_moods(
     spotify_track: dict, 
-    lang_hint: str | None = None,  # <-- (ใหม่) รับ "คำใบ้" ด้านภาษา
-    use_gemini: bool = True       # <-- **ADD THIS LINE**
+    lang_hint: str | None = None,
+    use_gemini: bool = True,
+    _cleaned_artist_name: str | None = None # <-- [FIX] เพิ่ม Parameter ใหม่
 ) -> tuple[dict | None, bool]:
     """
-    (V4 - Genre-Aware Smart Strategy)
-    Dynamically chooses the best lyric provider based on the genre-derived lang_hint.
+    (V5 - Genre-Aware Smart Strategy)
     """
     if not spotify_track or 'uri' not in spotify_track:
         return None, False
@@ -249,39 +249,38 @@ async def analyze_and_cache_song_moods(
     if cached_analysis and 'predicted_moods' in cached_analysis:
         return cached_analysis['predicted_moods'], True
 
-    artist_name = spotify_track.get('artists', [{}])[0].get('name', 'N/A')
+    # --- [FIX: THE "CV" FIX] ---
+    # ถ้าเราได้ชื่อที่สะอาดมาแล้ว (จาก _analyze_with_genius_only) ให้ใช้ชื่อนั้น
+    # แต่ถ้าถูกเรียกจากที่อื่น ให้ใช้ชื่อเดิมจาก track object
+    artist_name = _cleaned_artist_name if _cleaned_artist_name else spotify_track.get('artists', [{}])[0].get('name', 'N/A')
+    # --- [END CV FIX] ---
+    
     track_name = spotify_track.get('name', 'N/A')
     
     lyrics = None
 
-    # --- (*** ใหม่: ตรรกะ V4 Smart Strategy ***) ---
-    
-    # 2. ใช้ "คำใบ้" (lang_hint) ที่ได้มาจาก Genre เพื่อเลือกแผน
-    # (ถ้าไม่มีคำใบ้ ให้ default เป็น 'latin' -> Genius first)
+    # --- (ตรรกะ V5 - Gemini Switch) ---
     strategy = lang_hint if lang_hint else 'latin' 
     
     if not use_gemini:
         # ** STRATEGY 0: "Genius-Only" Mode (use_gemini=False) **
-        # This is the new logic path we are adding.
         logging.info(f"Genius-Only strategy for '{track_name}'.")
+        # เราส่ง artist_name ที่สะอาดแล้วไปให้ get_lyrics
         lyrics = await get_lyrics(artist_name, track_name)
     
     elif strategy == 'latin':
-        # Strategy 1: Latin (เพลงสากล) -> Genius ก่อน
+        # Strategy 1: Latin -> Genius ก่อน
         logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Genius (Plan A)...")
         lyrics = await get_lyrics(artist_name, track_name)
         
-        # Only try Gemini if it's enabled and lyrics are bad
         if (not lyrics or len(lyrics) < 50) and use_gemini:
-            # Fallback (Plan B): ถ้า Genius เฟล, ค่อยเรียก Gemini
             logging.warning(f"Genius failed for '{track_name}'. Trying Gemini (Plan B)...")
             rescued_data = await rescue_lyrics_with_gemini([spotify_track])
-            key = f"{artist_name} - {track_name}"
+            key = f"{artist_name} - {track_name}" # (Gemini rescue ยังอาจจะใช้ชื่อไม่สะอาด แต่นั่นคือ Plan B)
             if key in rescued_data and rescued_data[key]:
                 lyrics = rescued_data[key]
     else:
-        # Strategy 2: CJK, Thai (เพลงเอเชีย) -> Gemini ก่อน
-        # This whole block is skipped if use_gemini is False, which is correct
+        # Strategy 2: CJK, Thai -> Gemini ก่อน
         logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Gemini (Plan A)...")
         rescued_data = await rescue_lyrics_with_gemini([spotify_track])
         key = f"{artist_name} - {track_name}"
@@ -289,10 +288,9 @@ async def analyze_and_cache_song_moods(
         if key in rescued_data and rescued_data[key]:
             lyrics = rescued_data[key]
         else:
-            # Fallback (Plan B): ถ้า Gemini เฟล, ค่อยลอง Genius (เผื่อฟลุค)
             logging.warning(f"Gemini failed for '{track_name}'. Trying Genius (Plan B)...")
             lyrics = await get_lyrics(artist_name, track_name)
-    # --- (*** จบตรรกะ V4 ***) ---
+    # --- (จบตรรกะ V5) ---
 
     # 3. ประมวลผลเนื้อเพลงที่หามาได้ (เหมือนเดิม)
     if lyrics and len(lyrics) > 50:
@@ -318,6 +316,9 @@ def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
 
 # --- (*** นี่คือฟังก์ชันที่อัปเกรดตาม Workflow ของคุณ ***) ---
 # --- (*** นี่คือฟังก์ชันฉบับเต็มที่คุณขอ ***) ---
+# --- (*** นี่คือฟังก์ชันที่อัปเกรดตาม Workflow ของคุณ ***) ---
+# --- (*** นี่คือฟังก์ชันฉบับเต็มที่คุณขอ ***) ---
+# (นี่คือโค้ดเต็มของ get_intelligent_recommendations ใน recommender.py)
 async def get_intelligent_recommendations(
     sp_client: spotipy.Spotify, 
     user_id: str, 
@@ -327,7 +328,7 @@ async def get_intelligent_recommendations(
 ) -> list[dict]:
     """
     (Hybrid V17 - Batch Lyric Analysis & V16 Search-Based Discovery)
-    แก้ไขปัญหา 429 Quota Exceeded, Blacklist, และ unhashable type
+    (*** อัปเกรด V18: "CV Fix" + Language Booster ***)
     """
     # --- Constants ---
     MINIMUM_PLAYLIST_SIZE = 10
@@ -337,7 +338,7 @@ async def get_intelligent_recommendations(
 
     logging.info("--- Initializing V17: Iterative Curation Loop (Batch Lyrics & Search) ---")
 
-    # (Part 1: Blacklist - "ก้าวร้าว" ถูกต้องแล้ว)
+    # (Part 1: Blacklist)
     top_tracks_list = await get_user_top_tracks(sp_client, limit=10)
     if not top_tracks_list:
         return await get_fallback_recommendations(sp_client)
@@ -354,7 +355,7 @@ async def get_intelligent_recommendations(
     logging.info(f"Master blacklist initialized with {len(master_blacklist)} URIs (Existing + History + Dislikes).")
 
 
-    # --- (Part 2: Candidate Generation (V16 Search-Based) ) ---
+    # (Part 2: Candidate Generation)
     candidate_tracks_info = []
     
     top_artist_names = []
@@ -384,7 +385,7 @@ async def get_intelligent_recommendations(
                 candidate_tracks_info.append({
                     "artist": track['artists'][0]['name'],
                     "title": track['name'],
-                    "spotify_track_object": track # [FIX] ส่ง Track Object ไปเลย
+                    "spotify_track_object": track
                 })
                 
     except Exception as e:
@@ -405,14 +406,14 @@ async def get_intelligent_recommendations(
     logging.info(f"--- 🧬 Candidate Tracks (Total: {len(candidate_tracks_info)}) ---")
     
     
-    # --- ( Part 3: Parallel Lyric Analysis (V17 Batch Logic) ) ---
+    # --- ( Part 3: Parallel Lyric Analysis ) ---
     analysis_results = {}
     tracks_failed_genius = [] 
-    sem = asyncio.Semaphore(10) # (Genius รัน 10 threads ได้)
+    sem = asyncio.Semaphore(10)
 
     async def _analyze_with_genius_only(track_info, blacklist_to_use):
         """
-        (V17) Step 1: พยายามหาเนื้อเพลงด้วย Genius API (Plan A) เท่านั้น
+        (V18)
         """
         await sem.acquire()
         try:
@@ -429,8 +430,15 @@ async def get_intelligent_recommendations(
             track_name, artist = spotify_track.get('name', ''), spotify_track.get('artists', [{}])[0]
             artist_id, artist_name = artist.get('id'), artist.get('name', '')
             
-            artist_genre_lang = None
+            # --- [FIX: THE "CV" FIX] ---
+            # ลบ (CV: ...) ออกจากชื่อศิลปิน เพราะมันทำให้ Genius API พัง
+            # 'Haruka Amami (CV: Eriko Nakamura)' -> 'Haruka Amami'
+            if '(CV:' in artist_name:
+                artist_name = artist_name.split('(CV:')[0].strip()
+            # --- [END CV FIX] ---
             
+            # --- [BOOSTER LOGIC - PART 1A] ---
+            artist_genre_lang = None
             if artist_id:
                 try:
                     artist_details = await asyncio.to_thread(sp_client.artist, artist_id=artist_id)
@@ -439,30 +447,33 @@ async def get_intelligent_recommendations(
                 except Exception: 
                     pass 
 
-            # Determine the song's language, prioritizing the reliable artist genre
             song_lang = artist_genre_lang
             if song_lang is None:
-                # Fallback to the unreliable title/string check
                 song_lang = _detect_language_from_string(track_name, artist_name)
             
-            # --- [NEW SMART GUARDRAIL LOGIC] ---
             if guardrail_language and song_lang != guardrail_language:
-                # The song language (e.g., 'latin') mismatches the profile (e.g., 'cjk').
-                # BUT, check for the "Artist Pass"
-                if artist_genre_lang == guardrail_language:
-                    logging.info(f"GUARDRAIL: [Artist Pass] Bypassing filter for '{track_name}' (Artist lang '{artist_genre_lang}' matches profile)")
-                else:
-                    # No pass. The artist's genre is also a mismatch. Filter it.
-                    logging.warning(f"GUARDRAIL: Filtering out '{track_name}' (Song Lang: {song_lang}, Artist Lang: {artist_genre_lang})")
-                    return
+                logging.info(f"GUARDRAIL (Info): '{track_name}' (Lang: {song_lang}) mismatches profile. Will analyze anyway.")
             
             lang = song_lang
+            # --- [END PART 1A] ---
             
-            moods_tuple = await analyze_and_cache_song_moods(spotify_track, lang_hint=lang, use_gemini=False) # (FIX: ห้าม Gemini)
+            # เราส่ง artist_name ที่ "สะอาดแล้ว" เข้าไป
+            moods_tuple = await analyze_and_cache_song_moods(
+                spotify_track, 
+                lang_hint=lang, 
+                use_gemini=False,
+                _cleaned_artist_name=artist_name # ส่งชื่อที่สะอาดแล้วไป
+            )
             moods = moods_tuple[0] 
 
             if moods:
-                analysis_results[spotify_track['uri']] = {"track_object": spotify_track, "moods": moods}
+                # --- [BOOSTER LOGIC - PART 1B] ---
+                analysis_results[spotify_track['uri']] = {
+                    "track_object": spotify_track, 
+                    "moods": moods,
+                    "detected_lang": song_lang
+                }
+                # --- [END PART 1B] ---
                 master_blacklist.add(spotify_track['uri']) 
             else:
                 tracks_failed_genius.append(spotify_track) 
@@ -474,12 +485,13 @@ async def get_intelligent_recommendations(
 
     # (V17) Step 1: รัน Genius Plan A
     analysis_tasks_genius = [_analyze_with_genius_only(info, master_blacklist) for info in candidate_tracks_info]
-    await asyncio.gather(*analysis_tasks_genius) # (FIX: 'unhashable type')
+    await asyncio.gather(*analysis_tasks_genius)
     
     logging.info(f"Genius (Plan A) complete. Found {len(analysis_results)} lyrics. Failed: {len(tracks_failed_genius)}")
 
     # (V17) Step 2: รัน Gemini Plan B (Batch Request)
     if tracks_failed_genius:
+        # ด้วย "CV Fix" เราคาดหวังว่า tracks_failed_genius จะเหลือน้อยมากๆ (เช่น 0-3 เพลง)
         logging.info(f"Calling Gemini (Plan B) in one batch for {len(tracks_failed_genius)} tracks...")
         try:
             rescued_lyrics_map = await rescue_lyrics_with_gemini(tracks_failed_genius)
@@ -512,7 +524,7 @@ async def get_intelligent_recommendations(
     for uri in disliked_uris:
         track_info = await get_spotify_track_data(sp_client, uri)
         if track_info:
-            song_fingerprint, success = await analyze_and_cache_song_moods(track_info, lang_hint=None, use_gemini=False)
+            song_fingerprint, success = await analyze_and_cache_song_moods(track_info, lang_hint=None) 
             if success and song_fingerprint:
                 disliked_fingerprints.append(song_fingerprint)
                 
@@ -525,6 +537,7 @@ async def get_intelligent_recommendations(
         except (ValueError, KeyError, IndexError, TypeError): continue
     average_year = total_years / track_count if track_count > 0 else None
 
+    # --- [FIX 2: BOOSTER LOGIC - APPLY SCORE] ---
     # (Part 5: Two-Vector Scoring)
     logging.info("--- 📈 Scoring All Analyzed Candidates (V5 Two-Vector) ---")
     all_scored_candidates = []
@@ -539,6 +552,8 @@ async def get_intelligent_recommendations(
     for uri, result in analysis_results.items():
         spotify_track = result["track_object"]
         song_fingerprint = result["moods"]
+        song_lang = result.get("detected_lang")
+
         stylistic_score = calculate_cosine_similarity(stylistic_profile, song_fingerprint)
         
         if has_target_emotion:
@@ -563,9 +578,18 @@ async def get_intelligent_recommendations(
             except (ValueError, KeyError, IndexError, TypeError):
                 year_bonus = 0.0
         
-        final_score = (combined_mood_score * 0.8) + year_bonus - (dislike_penalty * 0.6)
-        spotify_track['ai_analysis'] = {"mood_score": float(final_score)}
+        language_bonus = 0.0
+        if guardrail_language:
+            if song_lang == guardrail_language:
+                language_bonus = 0.15 
+            elif song_lang == 'latin':
+                language_bonus = 0.0
+        
+        final_score = (combined_mood_score * 0.7) + language_bonus + (year_bonus * 0.8) - (dislike_penalty * 0.6)
+        
+        spotify_track['ai_analysis'] = {"mood_score": float(final_score), "lang_bonus": language_bonus}
         all_scored_candidates.append(spotify_track)
+    # --- [END FIX 2] ---
     
     all_scored_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
     
@@ -583,7 +607,6 @@ async def get_intelligent_recommendations(
         needed = MINIMUM_PLAYLIST_SIZE - len(final_playlist)
         logging.warning(f"Playlist too short. Starting Filler Iteration {current_iteration}/{MAX_FILLER_ITERATIONS}. Need {needed} more.")
 
-        # (V15.2 Randomized Seed Logic)
         seed_source_list = top_tracks_list
         num_seeds_to_pick = min(len(seed_source_list), 5)
         seed_tracks_for_filler = random.sample(seed_source_list, num_seeds_to_pick)
@@ -591,7 +614,6 @@ async def get_intelligent_recommendations(
 
         filler_candidates_info = []
         try:
-            # (V16 Search-Based Filler Logic)
             random_seed_artist_name = random.choice(seed_tracks_for_filler)['artists'][0]['name']
             logging.info(f"Filler Iteration {current_iteration}: Searching for artist '{random_seed_artist_name}'")
             
@@ -616,7 +638,7 @@ async def get_intelligent_recommendations(
             logging.error(f"Filler Iteration {current_iteration}: No new candidates found. Stopping loop.")
             break 
 
-        # --- ( V17 Batch Logic (สำหรับ Filler Loop) ) ---
+        # (Filler Loop)
         analysis_results.clear()
         tracks_failed_genius_filler = []
         
@@ -641,7 +663,6 @@ async def get_intelligent_recommendations(
                     master_blacklist.add(spotify_track['uri'])
             except Exception as e:
                 logging.error(f"Gemini (Plan B) filler batch failed: {e}", exc_info=True)
-        # --- [ จบ V17 Filler Loop ] ---
 
         new_filler_songs = []
         for uri, result in analysis_results.items():
@@ -666,9 +687,7 @@ async def get_intelligent_recommendations(
 
         new_filler_songs.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
         final_playlist.extend(new_filler_songs)
-        logging.info(f"Filler Iteration {current_iteration}: Added {len(new_filler_songs)} songs. Total now: {len(final_playlist)}")
-    
-    # --- จบ Loop ---
+        logging.info(f"Filler Iteration {current_iteration}: Added {len(new_filler_songs)}. Total now: {len(final_playlist)}")
     
     # (Part 7: Finalizing)
     if not final_playlist:
