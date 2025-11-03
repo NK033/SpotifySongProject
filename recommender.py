@@ -1,4 +1,4 @@
-# recommender.py (V13.3 - Genre-Based Guardrail)
+# recommender.py (V19 - Cleaned & BugFixed)
 import asyncio
 import spotipy
 import logging
@@ -14,7 +14,7 @@ from spotify_api import (
     get_user_profile, get_user_top_tracks, get_user_recently_played_tracks, 
     get_user_saved_tracks, search_spotify_songs, get_spotify_track_data
 )
-from lastfm_api import get_similar_tracks, get_chart_top_tracks, get_global_top_tracks, get_artist_top_tracks
+# --- [DELETED] Unused lastfm_api import ---
 from genius_api import get_lyrics
 from custom_model import predict_moods
 from database import (
@@ -221,16 +221,7 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> d
     logging.info("✅ Target Emotional Fingerprint created.")
     return avg_fingerprint
 
-def calculate_mood_score(song_moods: list, user_profile: dict) -> float:
-    """
-    คำนวณคะแนนความเข้ากันได้ทางอารมณ์ระหว่างเพลงกับโปรไฟล์ของผู้ใช้
-    """
-    if not song_moods or not user_profile:
-        return 0.0
-    
-    score = sum(user_profile.get(mood, 0) for mood in song_moods)
-        
-    return score / len(song_moods) if song_moods else 0.0
+# --- [DELETED] Unused calculate_mood_score function ---
 
 async def analyze_and_cache_song_moods(
     spotify_track: dict, 
@@ -318,7 +309,6 @@ def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
 # --- (*** นี่คือฟังก์ชันฉบับเต็มที่คุณขอ ***) ---
 # --- (*** นี่คือฟังก์ชันที่อัปเกรดตาม Workflow ของคุณ ***) ---
 # --- (*** นี่คือฟังก์ชันฉบับเต็มที่คุณขอ ***) ---
-# (นี่คือโค้ดเต็มของ get_intelligent_recommendations ใน recommender.py)
 # (นี่คือโค้ดเต็มของ get_intelligent_recommendations ใน recommender.py)
 # (*** V19: แก้ไข Bug การสร้าง Candidate - ใช้ Gemini Expansion ***)
 async def get_intelligent_recommendations(

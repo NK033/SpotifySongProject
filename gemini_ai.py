@@ -1,4 +1,4 @@
-# gemini_ai.py (OPTIMIZED V5 - Switched to Flash-Lite & Aggressive Batching)
+# gemini_ai.py (V5 - Model Router & V9 - Niche-Aware Prompts)
 import logging
 import google.generativeai as genai
 import json
@@ -11,18 +11,17 @@ from genius_api import get_lyrics
 from custom_model import predict_moods
 from spotify_api import get_spotify_track_data
 
-# === [OPTIMIZED] Centralized Model Configuration ===
-# เปลี่ยนไปใช้ flash-lite ซึ่งมี RPM สูงกว่า (30 RPM vs 15 RPM)
+# === Centralized Model Configuration (FIXED) ===
 TEXT_MODEL = genai.GenerativeModel(
-    'gemini-2.5-flash',  # <--CHANGED for High Quality Details
+    'gemini-2.5-flash',  # <-- Higher quality for descriptions
     system_instruction="คุณคือผู้ช่วยและนักวิจารณ์ดนตรีที่เชี่ยวชาญ สามารถวิเคราะห์เพลงได้อย่างแม่นยำและเขียนอธิบายได้อย่างเป็นธรรมชาติ"
 )
 
 JSON_MODEL = genai.GenerativeModel(
-    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash-lite',  # <-- Higher RPM for batching
     generation_config={"response_mime_type": "application/json"}
 )
-# ===================================================
+# =======================================
 
 # --- [ ฟังก์ชันฆ่าเชื้อ JSON ] ---
 def _sanitize_json_string(json_str: str) -> str:
@@ -43,9 +42,6 @@ async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
     album_name = spotify_track_data.get('album', {}).get('name', 'N/A')
     release_year = spotify_track_data.get('album', {}).get('release_date', '----')[:4]
     
-    # *** 1. ลบการเรียก predict_moods และ moods_text ออกไปทั้งหมด ***
-    
-    # *** 2. สร้าง Prompt ใหม่ตามที่คุณต้องการ ***
     prompt_content = f"""
     คุณเป็นนักวิจารณ์ดนตรี AI โปรดเขียนคำอธิบายสั้นๆ (ไม่เกิน 3-4 ประโยค) สำหรับเพลงนี้:
 
@@ -65,8 +61,6 @@ async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
     try:
         response = await TEXT_MODEL.generate_content_async(prompt_content)
         
-        # *** 3. บันทึกเฉพาะ gemini_analysis เท่านั้น ***
-        # เราจะไม่บันทึก "predicted_moods" ที่มีปัญหาอีกต่อไป
         combined_analysis = { "gemini_analysis": response.text }
         
         await save_song_analysis_to_db(spotify_track_data, combined_analysis)
@@ -77,24 +71,15 @@ async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
 
 async def get_song_analysis_details(sp_client: spotipy.Spotify, song_uri: str) -> dict:
     
-    # 1. พยายามดึงข้อมูลจาก Cache (ฐานข้อมูล) ก่อน
     analysis_data = await get_song_analysis_from_db(song_uri)
     
-    # 2. [จุดแก้ไขที่สำคัญ] 
-    # ตรวจสอบว่าข้อมูลมีอยู่ และ "สมบูรณ์" (มี key 'gemini_analysis') หรือไม่
     if analysis_data and 'gemini_analysis' in analysis_data:
         logging.info(f"Cache HIT (Complete) for {song_uri}")
         return analysis_data
 
-    # 3. ถ้า Cache ไม่มี หรือ "ไม่สมบูรณ์" (เช่น มีแต่ predicted_moods)
-    # ให้ทำการสร้างข้อมูลวิเคราะห์ใหม่ทั้งหมด
     logging.info(f"Cache MISS or Incomplete for {song_uri}. Generating new analysis...")
     try:
-        # ดึงข้อมูลเพลงล่าสุดจาก Spotify
         spotify_track_data = await get_spotify_track_data(sp_client, song_uri)
-        
-        # เรียกใช้ฟังก์ชัน analyze_and_store_song_analysis (ที่เราแก้ไขไปก่อนหน้า)
-        # เพื่อสร้างคำอธิบายจาก Gemini และบันทึกลง Cache
         return await analyze_and_store_song_analysis(spotify_track_data)
         
     except Exception as e:
@@ -107,11 +92,9 @@ async def summarize_playlist(
     seed_tracks: list[dict]
 ) -> str:
     
-    # 1. ดึงข้อมูล analysis ของ Final Playlist (เหมือนเดิม)
     tasks = [get_song_analysis_details(sp_client, uri) for uri in final_song_uris]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # 2. แปลงข้อมูล Seed Tracks และ Final Tracks ให้เป็นข้อความ
     seed_track_list_str = "\n".join([f"- {t['name']} by {t['artists'][0]['name']}" for t in seed_tracks if t and t.get('name') and t.get('artists')])
     
     final_track_list = []
@@ -121,7 +104,6 @@ async def summarize_playlist(
             final_track_list.append(f"- {track['name']} by {track['artists'][0]['name']}")
     final_track_list_str = "\n".join(final_track_list)
 
-    # 3. สร้าง Prompt ใหม่ตามที่คุณต้องการ
     prompt = f"""
     คุณเป็นภัณฑารักษ์ดนตรี (Music Curator) ผู้เชี่ยวชาญ
     นี่คือข้อมูล 2 ส่วนที่ใช้ในการวิเคราะห์:
@@ -151,11 +133,14 @@ async def summarize_playlist(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error summarizing playlist.")
 
 
+# --- [ V4 - NICHE-AWARE PROMPT (USER'S IDEA) ] ---
 async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -> list[dict]:
-    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
+    """
+    (V4 - Niche-Aware)
+    """
     if not top_tracks:
         return []
-    logging.info(f"Starting Gemini Seed Expansion (V3 - Lyrics-Rich) for request: '{user_message}'")
+    logging.info(f"Starting Gemini Seed Expansion (V4 - Niche-Aware) for request: '{user_message}'")
 
     seed_data = []
     for track in top_tracks:
@@ -178,16 +163,25 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
     else:
         theme_context = f"IMPORTANT: The user has a specific request right now. They want songs that fit this theme: '{user_message}'. The suggestions MUST match this theme."
 
+    # --- [ V4 PROMPT ] ---
     prompt = f"""
-    You are an AI music expert.
-    
-    1. Analyze the user's top tracks (Core Style): {json.dumps(seed_data)}
-    2. Analyze the user's current request (Theme): {theme_context}
+    You are an AI music expert. Your task is to act like a specialist record store owner.
 
-    3. Suggest 20 new songs that match BOTH the core style AND the theme.
-    
-    4. FOR EACH SONG, you MUST provide a "lyrics_summary" or "reasoning" (in English or Thai) that explains WHY this song fits the theme.
-       (e.g., "A chill, introspective song about driving alone," "Lyrically, this song is about sadness and longing.")
+    1.  **Analyze the user's top tracks (Core Style):** {json.dumps(seed_data, ensure_ascii=False)}
+
+    2.  **Infer the User's "Niche":** Based *only* on the seed tracks, what is this user's specific "niche"? 
+        (Examples: "Idol songs & CV Artists", "Anisong", "Game Music (OSTs)", "Vocaloid", "Mainstream J-Pop", "90s J-Rock", "Touhou"). 
+        This is the most important step.
+
+    3.  **Analyze the user's current request (Theme):** {theme_context}
+
+    4.  **Suggest 20 new songs:** Suggest 20 new songs that match BOTH the Theme AND the Core Style.
+        **CRITICAL: You MUST prioritize songs from the user's "Niche"**. 
+        For example, if their niche is "Idol songs", find other "Idol songs". 
+        If their niche is "Game Music", find other "Game Music". 
+        Only suggest mainstream songs if they are a perfect fit for this specific niche.
+
+    5.  **Provide Reasoning:** FOR EACH SONG, you MUST provide a "lyrics_summary" or "reasoning" (in English or Thai) that explains WHY this song fits the theme and the niche.
     
     Return ONLY a valid JSON list of objects.
     Example: [
@@ -195,6 +189,7 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         ...
     ]
     """
+    # --- [ END V4 PROMPT ] ---
     
     try:
         response = await JSON_MODEL.generate_content_async(prompt)
@@ -202,60 +197,41 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         
         json_match = re.search(r'\[.*\]', json_text, re.DOTALL) 
         if not json_match:
-            logging.error(f"Gemini (Lyrics-Rich) returned no JSON List. Raw: {json_text}")
+            logging.error(f"Gemini (Niche-Aware) returned no JSON List. Raw: {json_text}")
             return []
             
-        # --- [ FIX: ใช้ Sanitizer ] ---
         sanitized_json_string = _sanitize_json_string(json_match.group(0))
         json_data = json.loads(sanitized_json_string)
-        # --- [ จบ FIX ] ---
         
         if isinstance(json_data, list):
             valid_candidates = [
                 track for track in json_data 
                 if track.get("artist") and track.get("title") and track.get("lyrics_summary")
             ]
-            logging.info(f"Gemini (Lyrics-Rich) successful. Found {len(valid_candidates)} valid candidates.")
+            logging.info(f"Gemini (Niche-Aware) successful. Found {len(valid_candidates)} valid candidates.")
             return valid_candidates
         else:
-            logging.error(f"Gemini (Lyrics-Rich) returned unexpected JSON format.")
+            logging.error(f"Gemini (Niche-Aware) returned unexpected JSON format.")
             return []
 
     except Exception as e:
-        logging.error(f"Error in get_gemini_seed_expansion (Lyrics-Rich): {e}", exc_info=True)
+        logging.error(f"Error in get_gemini_seed_expansion (Niche-Aware): {e}", exc_info=True)
         return []
 
-# --- [ นี่คือฟังก์ชันที่แก้ไข ] ---
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     if not failed_tracks: 
         return {}
-    logging.info(f"--- Activating Gemini Lyric Finder (Optimized V5) for {len(failed_tracks)} tracks... ---")
-    
-    # --- [ OPTIMIZATION ] ---
-    # `gemini-2.0-flash-lite` (Free Tier) มี 30 RPM (1 request / 2 วินาที)
-    # เราจะเพิ่ม BATCH_SIZE และลด DELAY เพื่อใช้ RPM ที่สูงขึ้น
-    
-    BATCH_SIZE = 10 
-    # (เพิ่มจาก 5 -> 10 : ทำงานทีละ 10 เพลง)
-    
-    DELAY_BETWEEN_BATCHES = 3 
-    # (ลดจาก 7 -> 3 : รอ 3 วินาทีระหว่าง batch)
-    
-    # การคำนวณ:
-    # (60 วินาที / 3 วินาที) = 20 requests ต่อนาที (ยังต่ำกว่า 30 RPM เพื่อความปลอดภัย)
-    # 20 requests * 10 เพลง = 200 เพลงต่อนาที
-    # (ของเดิม: (60/7)*5 = ~42 เพลงต่อนาที)
-    # นี่คือการเพิ่มประสิทธิภาพประมาณ ~4.6 เท่า!
-    # --- [ END OPTIMIZATION ] ---
+    logging.info(f"--- Activating Gemini Lyric Finder (Rate-Limit Proof V4) for {len(failed_tracks)} tracks... ---")
+    BATCH_SIZE = 5
+    DELAY_BETWEEN_BATCHES = 7
     
     all_rescued_data = {}
-    
     total_batches = (len(failed_tracks) + BATCH_SIZE - 1) // BATCH_SIZE
     
     for i in range(0, len(failed_tracks), BATCH_SIZE):
         batch_tracks = failed_tracks[i:i + BATCH_SIZE]
         current_batch_num = (i // BATCH_SIZE) + 1
-        logging.info(f"--- Processing batch {current_batch_num}/{total_batches} (Size: {len(batch_tracks)}) ---")
+        logging.info(f"--- Processing batch {current_batch_num}/{total_batches} ---")
 
         tracks_for_prompt = []
         id_to_key_map = {}
@@ -312,7 +288,6 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
                 logging.error(f"❌ Gemini API returned a {type(api_response_data)} instead of a dict for this batch.")
 
         except Exception as e:
-            # เราจะ log error ไว้ แต่จะปล่อยให้มันทำงาน batch ต่อไป (เผื่อ batch หน้าสำเร็จ)
             logging.error(f"❌ Error during Gemini Lyric Finder batch: {e}", exc_info=True)
             pass 
 
@@ -321,38 +296,49 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
             await asyncio.sleep(DELAY_BETWEEN_BATCHES)
 
     found_count = sum(1 for lyric in all_rescued_data.values() if lyric)
-    logging.info(f"✅ Gemini Lyric Finder (V5) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
+    logging.info(f"✅ Gemini Lyric Finder (V4) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
     return all_rescued_data
-# --- [ จบฟังก์ชันที่แก้ไข ] ---
-
+    
+# --- [ V9 - NICHE-AWARE PROMPT (USER'S IDEA) ] ---
 async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardrail: str) -> list[dict]:
     """
-    (V8.2 - Language Aware & No Duplicates)
+    (V9 - Niche-Aware Filler)
     """
     if not existing_tracks: return []
-    logging.info("--- Activating Gemini Playlist Filler (V8.2)... ---")
+    logging.info("--- Activating Gemini Playlist Filler (V9 - Niche-Aware)... ---")
     track_list_str = "\n".join([f"- '{t['name']}' by {t['artists'][0]['name']}" for t in existing_tracks])
     
+    # --- [ V9 PROMPT ] ---
     prompt = f"""
-    This playlist is too short. Here are the songs already in it (or that we are using as seeds):
+    This playlist is too short. Here are the songs we are using as seeds for the user's taste:
     {track_list_str}
 
+    **STEP 1: Analyze the User's "Niche"**
+    Based *only* on the seed songs, what is this user's specific "niche"? 
+    (Examples: "Idol songs & CV Artists", "Anisong", "Game Music (OSTs)", "Vocaloid", "Mainstream J-Pop", "90s J-Rock").
+
+    **STEP 2: Find NEW Songs from that Niche**
+    
     **CRITICAL INSTRUCTION 1 (LANGUAGE):**
     All recommended songs MUST be in the same language as the seed tracks.
     The required language code is: '{lang_guardrail}'.
     (Example: 'cjk' means Japanese/Korean, 'latin' means English/Spanish, 'th' means Thai).
-    DO NOT suggest songs in other languages.
     
     **CRITICAL INSTRUCTION 2 (NO DUPLICATES):**
-    DO NOT recommend the songs listed above. You must find NEW, SIMILAR songs.
+    DO NOT recommend the songs listed above. You must find NEW songs.
 
+    **CRITICAL INSTRUCTION 3 (NICHE-MATCHING):**
     Recommend up to 20 new songs that match the genre, language, and emotional vibe.
-    
+    **These new songs MUST match the user's "Niche" from Step 1.**
+    Do NOT suggest popular mainstream songs unless they are from that *exact* niche.
+
     **Response Format Requirement (Crucial):**
     - Respond with a JSON object containing a single key "filler_tracks".
     - The value must be a list of objects, each with three keys: "artist", "track", and "lyrics_summary".
     - "lyrics_summary" should be a concise, one-sentence summary of the song's lyrical theme.
     """
+    # --- [ END V9 PROMPT ] ---
+    
     try:
         response = await JSON_MODEL.generate_content_async(prompt)
         json_text = response.text.strip() 
@@ -360,21 +346,21 @@ async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardr
         json_match = re.search(r'\{.*\S.*\}', json_text, re.DOTALL)
         
         if not json_match:
-            logging.error(f"❌ Gemini (Filler) returned no JSON object. Raw: {json_text}")
+            logging.error(f"❌ Gemini (Filler V9) returned no JSON object. Raw: {json_text}")
             return []
 
         sanitized_json_string = _sanitize_json_string(json_match.group(0))
         data = json.loads(sanitized_json_string)
         
         filler_tracks = data.get("filler_tracks", [])
-        logging.info(f"✅ Gemini Filler (V8.2) found {len(filler_tracks)} emergency candidates.")
+        logging.info(f"✅ Gemini Filler (V9 - Niche-Aware) found {len(filler_tracks)} emergency candidates.")
         return filler_tracks
     except Exception as e:
-        logging.error(f"❌ Error during Gemini Filler mission: {e}", exc_info=True)
+        logging.error(f"❌ Error during Gemini Filler (V9) mission: {e}", exc_info=True)
         return []
+# --- [ จบฟังก์ชันที่แก้ไข ] ---
 
 async def get_emotional_profile_from_gemini(user_message: str) -> dict:
-    # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
     logging.info(f"Using Gemini to translate abstract request: '{user_message}'")
     
     EMOTION_LABELS = "['joy', 'sadness', 'anger', 'fear', 'excitement', 'love', 'optimism', 'neutral']"
@@ -416,10 +402,8 @@ async def get_emotional_profile_from_gemini(user_message: str) -> dict:
             logging.error(f"Gemini (Translator) returned no JSON. Raw: {json_text}")
             return {}
             
-        # --- [ FIX: ใช้ Sanitizer ] ---
         sanitized_json_string = _sanitize_json_string(json_match.group(0))
         json_data = json.loads(sanitized_json_string)
-        # --- [ จบ FIX ] ---
         
         if isinstance(json_data, dict):
             logging.info(f"Gemini (Translator) successful. Profile: {json_data}")
