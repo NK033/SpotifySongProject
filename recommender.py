@@ -2,7 +2,8 @@
 import asyncio
 import spotipy
 import logging
-import re  
+import re
+from gemini_ai import preload_gemini_details
 from datetime import datetime, timedelta
 from collections import Counter  
 import numpy as np
@@ -329,18 +330,60 @@ async def get_intelligent_recommendations(
 
     logging.info("--- Initializing V19: Iterative Curation Loop (Gemini Expansion & Batch Lyrics) ---")
 
-    # (Part 1: Check for Cold Start)
-    top_tracks_list = await get_user_top_tracks(sp_client, limit=10)
-    if not top_tracks_list:
-        logging.warning("Cold start detected: No top tracks found for user.")
-        fallback_tracks = await get_fallback_recommendations(sp_client)
-        if fallback_tracks:
-            logging.info("Successfully retrieved fallback recommendations for cold start.")
-            return fallback_tracks
-        else:
-            logging.error("Fallback recommendations also failed. Cold start failed completely.")
+    # ==========================================
+    # [NUCLEAR FIX] COLD START DETECTION V2.0
+    # ==========================================
+    
+    logging.info("🔍 Starting Cold Start Detection...")
+    
+    # Step 1: Gather seed tracks
+    try:
+        user_seed_tracks = await get_seed_tracks(sp_client)
+    except Exception as e:
+        logging.error(f"❌ Failed to get seed tracks: {e}")
+        user_seed_tracks = []
+    
+    # Step 2: Count the tracks explicitly
+    seed_count = 0
+    if user_seed_tracks is not None:
+        seed_count = len(user_seed_tracks)
+    
+    logging.info(f"📊 Seed Track Count: {seed_count}")
+    
+    # Step 3: Explicit boolean check
+    is_cold_start = False
+    
+    if seed_count == 0:
+        is_cold_start = True
+        logging.warning("⚠️ COLD START TYPE A: Zero seed tracks found")
+    elif seed_count < 3:
+        is_cold_start = True
+        logging.warning(f"⚠️ COLD START TYPE B: Insufficient data ({seed_count} tracks < 3 minimum)")
+    else:
+        logging.info(f"✅ Sufficient data found: {seed_count} seed tracks")
+    
+    # Step 4: Execute fallback if cold start detected
+    if is_cold_start is True:
+        logging.warning("🚨 ACTIVATING FALLBACK SYSTEM...")
+        
+        try:
+            fallback_tracks = await get_fallback_recommendations(sp_client)
+            
+            # Verify fallback actually returned data
+            if fallback_tracks and len(fallback_tracks) > 0:
+                logging.info(f"✅ Fallback successful: {len(fallback_tracks)} tracks returned")
+                return fallback_tracks
+            else:
+                logging.error("❌ Fallback returned empty list")
+                return []
+                
+        except Exception as e:
+            logging.error(f"❌ Fallback system crashed: {e}")
             return []
-    user_seed_tracks = await get_seed_tracks(sp_client)
+    
+    # ==========================================
+    # [END NUCLEAR FIX]
+    # ==========================================
     
     guardrail_language, dominant_language_for_prompting = await _determine_language_guardrail(sp_client, user_seed_tracks)
     
@@ -581,7 +624,7 @@ async def get_intelligent_recommendations(
         needed = MINIMUM_PLAYLIST_SIZE - len(final_playlist)
         logging.warning(f"Playlist too short. Starting Filler Iteration {current_iteration}/{MAX_FILLER_ITERATIONS}. Need {needed} more.")
 
-        seed_source_list = top_tracks_list
+        seed_source_list = await get_user_top_tracks(sp_client, limit=10)
         num_seeds_to_pick = min(len(seed_source_list), 5)
         seed_tracks_for_filler = random.sample(seed_source_list, num_seeds_to_pick)
         logging.info(f"Using RANDOMIZED Top-Tracks seeds for filler: {[t['name'] for t in seed_tracks_for_filler]}")
@@ -679,13 +722,30 @@ async def get_intelligent_recommendations(
     logging.info(f"--- ✅ Final Curated Playlist ({len(final_playlist)} Songs) ---")
     for i, track in enumerate(final_playlist[:10]):
         logging.info(f"  {i+1}. (Score: {track['ai_analysis']['mood_score']:.4f}) '{track['name']}' by {track['artists'][0]['name']}")
-    
+
+# 🔥 NEW: auto preload song details
+    await preload_gemini_details(sp_client, final_playlist)
+
     return final_playlist
 
 # (*** แก้ไข ***) เพิ่ม Log ในฟังก์ชันนี้
+# ================================================
+# ✅ PATCH: Auto-Fallback Cold Start (V3 - Kantapong Fix)
+# ================================================
+import logging
+import asyncio
+import random
+from spotify_api import (
+    get_user_top_tracks,
+    get_user_saved_tracks,
+    get_user_recently_played_tracks,
+    get_fallback_recommendations  # ✅ ต้องแน่ใจว่ามี import นี้
+)
+
 async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
     """
     รวบรวมเพลงเมล็ดพันธุ์จาก Top Tracks, Saved Tracks, และ Recently Played
+    (V3 - Auto Fallback: ถ้าไม่มีเพลงเลย จะดึง Fallback จากระบบอัตโนมัติ)
     """
     tasks = [
         get_user_top_tracks(sp_client, limit=10),
@@ -695,16 +755,15 @@ async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
     results = await asyncio.gather(*tasks)
     top_tracks, liked_tracks, recent_tracks = results
 
-    # (*** LOGGING 4 ***) แสดง Seed Tracks ทั้งหมด
     logging.info("--- 🌱 Identifying Seed Tracks ---")
-    
+
     logging.info(f"--- 🌙 User Recently Played Tracks ({len(recent_tracks)}) ---")
     if recent_tracks:
         for i, track in enumerate(recent_tracks):
             if track and track.get('name') and track.get('artists'):
                 logging.info(f"  {i+1}. '{track['name']}' by {track['artists'][0]['name']}")
     else:
-        logging.info("  (No liked tracks found)")
+        logging.info("  (No recently played tracks found)")
 
     logging.info(f"--- 🏆 User Top Tracks ({len(top_tracks)}) ---")
     if top_tracks:
@@ -721,14 +780,31 @@ async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
                 logging.info(f"  {i+1}. '{track['name']}' by {track['artists'][0]['name']}")
     else:
         logging.info("  (No liked tracks found)")
-    # (*** จบ LOGGING 4 ***)
 
+    # รวมทั้งหมด (ป้องกันซ้ำ)
     all_seed_tracks = {}
     for track in top_tracks + liked_tracks + recent_tracks:
         if track and track.get('uri') and track['uri'] not in all_seed_tracks:
             all_seed_tracks[track['uri']] = track
 
+    # ✅ ถ้าไม่มี seed tracks เลย → ใช้ fallback จาก spotify_api
+    if not all_seed_tracks:
+        logging.warning("⚠️ No seed tracks found. Using fallback recommendations as seed source.")
+        try:
+            fallback_tracks = await get_fallback_recommendations(sp_client)
+            if fallback_tracks and len(fallback_tracks) > 0:
+                for track in fallback_tracks:
+                    if track and track.get('uri') and track['uri'] not in all_seed_tracks:
+                        all_seed_tracks[track['uri']] = track
+                logging.info(f"✅ Fallback seeding success: {len(all_seed_tracks)} tracks used.")
+            else:
+                logging.error("❌ Fallback returned empty list (no seed candidates).")
+        except Exception as e:
+            logging.error(f"❌ Failed to fetch fallback seeds: {e}", exc_info=True)
+
+    logging.info(f"📊 Final Seed Track Count: {len(all_seed_tracks)}")
     return list(all_seed_tracks.values())
+
 
 async def update_user_profile_background(token_info: dict, user_id: str):
     """

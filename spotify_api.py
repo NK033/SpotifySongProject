@@ -199,3 +199,27 @@ async def get_fallback_recommendations(sp_client: spotipy.Spotify) -> list[dict]
 
     logging.error("All fallback plans failed. Returning empty list.")
     return []
+
+# --- [NEW FUNCTION] Auto preloading song details with Gemini ---
+# --- [NEW FUNCTION] Auto preloading song details with Gemini ---
+async def preload_gemini_details(sp_client: spotipy.Spotify, tracks: list[dict]):
+    """
+    โหลดรายละเอียดเพลง (Gemini analysis) แบบอัตโนมัติให้ทุกเพลงใน background
+    ใช้ asyncio.gather เพื่อรันพร้อมกัน (batch-safe)
+    """
+    if not tracks:
+        return
+
+    logging.info(f"🚀 Auto-preloading Gemini Details for {len(tracks)} tracks...")
+
+    tasks = []
+    for t in tracks:
+        if t and t.get("uri"):
+            tasks.append(get_song_analysis_details(sp_client, t["uri"]))
+
+    try:
+        # รันพร้อมกันแบบไม่ block ฟังก์ชันหลัก
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logging.info("✅ All Gemini details preloaded successfully.")
+    except Exception as e:
+        logging.error(f"❌ Error during Gemini auto-preload: {e}", exc_info=True)
