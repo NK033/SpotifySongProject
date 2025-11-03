@@ -24,9 +24,9 @@ body {
 .light-theme {
   --bg-primary: #f0f2f5; /* พื้นหลังหลัก (เทาอ่อน) */
   --bg-secondary: rgba(255, 255, 255, 0.95); 
-  --bg-glass: rgba(255, 255, 255, 0.3);
+  --bg-glass: rgba(82, 80, 80, 0.247);
   --text-primary: #1a202c; /* ตัวอักษรหลัก (ดำ) */
-  --text-secondary: #4a5568; /* ตัวอักษรรอง (เทาเข้ม) */
+  --text-secondary: #3a3b3d; /* ตัวอักษรรอง (เทาเข้ม) */
   --border-color: rgba(0, 0, 0, 0.1); /* เส้นขอบ (ดำ-โปร่งแสง) */
   --chat-bubble-ai: #e2e8f0; /* สีช่องแชท AI */
   --gradient-start: #1DB954;
