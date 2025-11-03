@@ -319,6 +319,8 @@ def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
 # --- (*** นี่คือฟังก์ชันที่อัปเกรดตาม Workflow ของคุณ ***) ---
 # --- (*** นี่คือฟังก์ชันฉบับเต็มที่คุณขอ ***) ---
 # (นี่คือโค้ดเต็มของ get_intelligent_recommendations ใน recommender.py)
+# (นี่คือโค้ดเต็มของ get_intelligent_recommendations ใน recommender.py)
+# (*** V19: แก้ไข Bug การสร้าง Candidate - ใช้ Gemini Expansion ***)
 async def get_intelligent_recommendations(
     sp_client: spotipy.Spotify, 
     user_id: str, 
@@ -327,8 +329,7 @@ async def get_intelligent_recommendations(
     user_message: str
 ) -> list[dict]:
     """
-    (Hybrid V17 - Batch Lyric Analysis & V16 Search-Based Discovery)
-    (*** อัปเกรด V18: "CV Fix" + Language Booster ***)
+    (Hybrid V19 - Gemini-Expansion-Based Discovery)
     """
     # --- Constants ---
     MINIMUM_PLAYLIST_SIZE = 10
@@ -336,7 +337,7 @@ async def get_intelligent_recommendations(
     LOOSE_SCORE_THRESHOLD = 0.25
     MAX_FILLER_ITERATIONS = 3 
 
-    logging.info("--- Initializing V17: Iterative Curation Loop (Batch Lyrics & Search) ---")
+    logging.info("--- Initializing V19: Iterative Curation Loop (Gemini Expansion & Batch Lyrics) ---")
 
     # (Part 1: Blacklist)
     top_tracks_list = await get_user_top_tracks(sp_client, limit=10)
@@ -356,53 +357,27 @@ async def get_intelligent_recommendations(
 
 
     # (Part 2: Candidate Generation)
+    # --- [FIX V19: แทนที่ V16 Search Logic ด้วย Gemini Expansion] ---
     candidate_tracks_info = []
-    
-    top_artist_names = []
-    seen_artist_names = set()
-    for track in top_tracks_list:
-        if track and track.get('artists'):
-            artist_name = track['artists'][0]['name']
-            if artist_name not in seen_artist_names:
-                top_artist_names.append(artist_name)
-                seen_artist_names.add(artist_name)
-        if len(top_artist_names) >= 5:
-            break
             
-    logging.info(f"Cascade Strategy (V16): Searching for tracks from Top 5 Artists: {top_artist_names}")
-
-    search_tasks = []
-    for artist_name in top_artist_names:
-        search_tasks.append(
-            search_spotify_songs(sp_client, query=f"artist:\"{artist_name}\"", limit=10)
-        )
+    logging.info(f"--- 🧬 Calling Gemini Seed Expansion ---")
     
-    try:
-        search_results_lists = await asyncio.gather(*search_tasks)
-        
-        for track_list in search_results_lists:
-            for track in track_list:
-                candidate_tracks_info.append({
-                    "artist": track['artists'][0]['name'],
-                    "title": track['name'],
-                    "spotify_track_object": track
-                })
-                
-    except Exception as e:
-        logging.error(f"V16 Search Strategy failed: {e}")
+    # เราใช้ user_seed_tracks (ซึ่งรวม Top+Recent+Liked) เพื่อให้ Gemini มี context ที่ดีที่สุด
+    gemini_candidates = await get_gemini_seed_expansion(user_seed_tracks, user_message)
 
-    if not candidate_tracks_info:
-        logging.error("V16 Search Strategy found 0 candidates. Using fallback.")
+    if not gemini_candidates:
+        logging.error("Gemini Seed Expansion found 0 candidates. Using fallback.")
         return await get_fallback_recommendations(sp_client)
+
+    # แปลงผลลัพธ์จาก Gemini ให้อยู่ใน format ที่ V17/V18 คาดหวัง
+    for track in gemini_candidates:
+        candidate_tracks_info.append({
+            "artist": track.get('artist'),
+            "title": track.get('title'),
+            "spotify_track_object": None  # <-- ตั้งเป็น None เพื่อให้ logic ด้านล่างไป search หา
+        })
+    # --- [END FIX V19] ---
     
-    unique_candidates = []
-    seen_candidates = set()
-    for track in candidate_tracks_info:
-        key = (track.get('artist', '').casefold(), track.get('title', '').casefold())
-        if key not in seen_candidates and key[0] and key[1]:
-            unique_candidates.append(track)
-            seen_candidates.add(key)
-    candidate_tracks_info = unique_candidates
     logging.info(f"--- 🧬 Candidate Tracks (Total: {len(candidate_tracks_info)}) ---")
     
     
@@ -413,16 +388,22 @@ async def get_intelligent_recommendations(
 
     async def _analyze_with_genius_only(track_info, blacklist_to_use):
         """
-        (V18)
+        (V18 Logic - ถูกเรียกโดย V19)
         """
         await sem.acquire()
         try:
             spotify_track = track_info.get("spotify_track_object")
+            
+            # --- [FIX V19: ค้นหา Track Object ถ้ามันไม่มี (มาจาก Gemini)] ---
             if not spotify_track:
                 query = f"track:{track_info.get('title')} artist:{track_info.get('artist')}"
+                # ใช้ await เดียว ไม่ต้อง to_thread เพราะ search_spotify_songs เป็น async อยู่แล้ว
                 spotify_results = await search_spotify_songs(sp_client, query, limit=1)
-                if not spotify_results: return
+                if not spotify_results: 
+                    logging.warning(f"Could not find Spotify track for: {track_info.get('title')} by {track_info.get('artist')}")
+                    return # ออกจาก task นี้ถ้าหาเพลงไม่เจอ
                 spotify_track = spotify_results[0]
+            # --- [END FIX V19] ---
             
             if spotify_track['uri'] in blacklist_to_use:
                 return
@@ -431,8 +412,6 @@ async def get_intelligent_recommendations(
             artist_id, artist_name = artist.get('id'), artist.get('name', '')
             
             # --- [FIX: THE "CV" FIX] ---
-            # ลบ (CV: ...) ออกจากชื่อศิลปิน เพราะมันทำให้ Genius API พัง
-            # 'Haruka Amami (CV: Eriko Nakamura)' -> 'Haruka Amami'
             if '(CV:' in artist_name:
                 artist_name = artist_name.split('(CV:')[0].strip()
             # --- [END CV FIX] ---
@@ -457,12 +436,11 @@ async def get_intelligent_recommendations(
             lang = song_lang
             # --- [END PART 1A] ---
             
-            # เราส่ง artist_name ที่ "สะอาดแล้ว" เข้าไป
             moods_tuple = await analyze_and_cache_song_moods(
                 spotify_track, 
                 lang_hint=lang, 
                 use_gemini=False,
-                _cleaned_artist_name=artist_name # ส่งชื่อที่สะอาดแล้วไป
+                _cleaned_artist_name=artist_name 
             )
             moods = moods_tuple[0] 
 
@@ -491,7 +469,6 @@ async def get_intelligent_recommendations(
 
     # (V17) Step 2: รัน Gemini Plan B (Batch Request)
     if tracks_failed_genius:
-        # ด้วย "CV Fix" เราคาดหวังว่า tracks_failed_genius จะเหลือน้อยมากๆ (เช่น 0-3 เพลง)
         logging.info(f"Calling Gemini (Plan B) in one batch for {len(tracks_failed_genius)} tracks...")
         try:
             rescued_lyrics_map = await rescue_lyrics_with_gemini(tracks_failed_genius)
@@ -614,25 +591,27 @@ async def get_intelligent_recommendations(
 
         filler_candidates_info = []
         try:
-            random_seed_artist_name = random.choice(seed_tracks_for_filler)['artists'][0]['name']
-            logging.info(f"Filler Iteration {current_iteration}: Searching for artist '{random_seed_artist_name}'")
+            # --- [FIX V19: ใช้ Gemini Filler แทนการ search] ---
+            logging.info(f"Filler Iteration {current_iteration}: Calling Gemini Filler...")
+            # ใช้ dominant_language_for_prompting เพื่อบอก AI ว่าจะเอาเพลงภาษาอะไร
+            lang_code_for_prompt = dominant_language_for_prompting if dominant_language_for_prompting else 'latin'
             
-            filler_search_results = await search_spotify_songs(
-                sp_client, 
-                query=f"artist:\"{random_seed_artist_name}\"", 
-                limit=15
+            filler_gemini_results = await get_filler_tracks_with_lyrics(
+                seed_tracks_for_filler,
+                lang_code_for_prompt
             )
-            
-            if filler_search_results:
-                for track in filler_search_results:
+
+            if filler_gemini_results:
+                for track in filler_gemini_results:
                     filler_candidates_info.append({
-                        "artist": track['artists'][0]['name'],
-                        "title": track['name'],
-                        "spotify_track_object": track 
+                        "artist": track.get('artist'),
+                        "title": track.get('track'), # Key ใน filler คือ 'track'
+                        "spotify_track_object": None 
                     })
+            # --- [END FIX V19] ---
             
         except Exception as e: 
-            logging.error(f"Filler Iteration {current_iteration}: Search strategy failed: {e}")
+            logging.error(f"Filler Iteration {current_iteration}: Gemini Filler strategy failed: {e}")
 
         if not filler_candidates_info:
             logging.error(f"Filler Iteration {current_iteration}: No new candidates found. Stopping loop.")

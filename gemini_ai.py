@@ -1,4 +1,4 @@
-# gemini_ai.py (FIXED V4 - Added "No Duplicates" instruction)
+# gemini_ai.py (OPTIMIZED V5 - Switched to Flash-Lite & Aggressive Batching)
 import logging
 import google.generativeai as genai
 import json
@@ -11,17 +11,18 @@ from genius_api import get_lyrics
 from custom_model import predict_moods
 from spotify_api import get_spotify_track_data
 
-# === Centralized Model Configuration ===
+# === [OPTIMIZED] Centralized Model Configuration ===
+# เปลี่ยนไปใช้ flash-lite ซึ่งมี RPM สูงกว่า (30 RPM vs 15 RPM)
 TEXT_MODEL = genai.GenerativeModel(
-    'gemini-2.0-flash',
+    'gemini-2.5-flash',  # <--CHANGED for High Quality Details
     system_instruction="คุณคือผู้ช่วยและนักวิจารณ์ดนตรีที่เชี่ยวชาญ สามารถวิเคราะห์เพลงได้อย่างแม่นยำและเขียนอธิบายได้อย่างเป็นธรรมชาติ"
 )
 
 JSON_MODEL = genai.GenerativeModel(
-    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
     generation_config={"response_mime_type": "application/json"}
 )
-# =======================================
+# ===================================================
 
 # --- [ ฟังก์ชันฆ่าเชื้อ JSON ] ---
 def _sanitize_json_string(json_str: str) -> str:
@@ -224,16 +225,28 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         logging.error(f"Error in get_gemini_seed_expansion (Lyrics-Rich): {e}", exc_info=True)
         return []
 
+# --- [ นี่คือฟังก์ชันที่แก้ไข ] ---
 async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     if not failed_tracks: 
         return {}
-    logging.info(f"--- Activating Gemini Lyric Finder (Rate-Limit Proof V4) for {len(failed_tracks)} tracks... ---")
-    BATCH_SIZE = 5
+    logging.info(f"--- Activating Gemini Lyric Finder (Optimized V5) for {len(failed_tracks)} tracks... ---")
     
-    # --- [ THE FIX (User Request) ] ---
-    # ลองที่ 7 วินาที (จากเดิม 5 วินาที)
-    DELAY_BETWEEN_BATCHES = 7
-    # --- [ END FIX ] ---
+    # --- [ OPTIMIZATION ] ---
+    # `gemini-2.0-flash-lite` (Free Tier) มี 30 RPM (1 request / 2 วินาที)
+    # เราจะเพิ่ม BATCH_SIZE และลด DELAY เพื่อใช้ RPM ที่สูงขึ้น
+    
+    BATCH_SIZE = 10 
+    # (เพิ่มจาก 5 -> 10 : ทำงานทีละ 10 เพลง)
+    
+    DELAY_BETWEEN_BATCHES = 3 
+    # (ลดจาก 7 -> 3 : รอ 3 วินาทีระหว่าง batch)
+    
+    # การคำนวณ:
+    # (60 วินาที / 3 วินาที) = 20 requests ต่อนาที (ยังต่ำกว่า 30 RPM เพื่อความปลอดภัย)
+    # 20 requests * 10 เพลง = 200 เพลงต่อนาที
+    # (ของเดิม: (60/7)*5 = ~42 เพลงต่อนาที)
+    # นี่คือการเพิ่มประสิทธิภาพประมาณ ~4.6 เท่า!
+    # --- [ END OPTIMIZATION ] ---
     
     all_rescued_data = {}
     
@@ -242,7 +255,7 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
     for i in range(0, len(failed_tracks), BATCH_SIZE):
         batch_tracks = failed_tracks[i:i + BATCH_SIZE]
         current_batch_num = (i // BATCH_SIZE) + 1
-        logging.info(f"--- Processing batch {current_batch_num}/{total_batches} ---")
+        logging.info(f"--- Processing batch {current_batch_num}/{total_batches} (Size: {len(batch_tracks)}) ---")
 
         tracks_for_prompt = []
         id_to_key_map = {}
@@ -308,10 +321,10 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
             await asyncio.sleep(DELAY_BETWEEN_BATCHES)
 
     found_count = sum(1 for lyric in all_rescued_data.values() if lyric)
-    logging.info(f"✅ Gemini Lyric Finder (V4) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
+    logging.info(f"✅ Gemini Lyric Finder (V5) retrieved lyrics for {found_count}/{len(failed_tracks)} tracks total.")
     return all_rescued_data
-    
-# --- [ นี่คือฟังก์ชันที่แก้ไข ] ---
+# --- [ จบฟังก์ชันที่แก้ไข ] ---
+
 async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardrail: str) -> list[dict]:
     """
     (V8.2 - Language Aware & No Duplicates)
@@ -359,7 +372,6 @@ async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardr
     except Exception as e:
         logging.error(f"❌ Error during Gemini Filler mission: {e}", exc_info=True)
         return []
-# --- [ จบฟังก์ชันที่แก้ไข ] ---
 
 async def get_emotional_profile_from_gemini(user_message: str) -> dict:
     # (ฟังก์ชันนี้ **ต้อง** แก้ไข)
