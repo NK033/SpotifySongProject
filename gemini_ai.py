@@ -36,68 +36,109 @@ def _sanitize_json_string(json_str: str) -> str:
 
 
 async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
-    # (ฟังก์ชันนี้ไม่ได้รับผลกระทบ เพราะใช้ TEXT_MODEL)
-    logging.info(f"Analyzing '{spotify_track_data.get('name')}' for a concise summary...")
+    logging.info(f"Generating NEW Gemini analysis for '{spotify_track_data.get('name')}'...")
     artist_name = spotify_track_data.get('artists', [{}])[0].get('name', 'N/A')
     song_title = spotify_track_data.get('name', 'N/A')
+    album_name = spotify_track_data.get('album', {}).get('name', 'N/A')
+    release_year = spotify_track_data.get('album', {}).get('release_date', '----')[:4]
     
-    lyrics = await get_lyrics(artist_name, song_title)
-    predicted_moods = predict_moods(lyrics) if lyrics else []
-    moods_text = ", ".join(predicted_moods) if predicted_moods else "ไม่สามารถระบุได้"
+    # *** 1. ลบการเรียก predict_moods และ moods_text ออกไปทั้งหมด ***
     
+    # *** 2. สร้าง Prompt ใหม่ตามที่คุณต้องการ ***
     prompt_content = f"""
-    คุณเป็นนักวิเคราะห์ดนตรีมืออาชีพ โปรด "สรุปภาพรวม" ของเพลงต่อไปนี้ให้กระชับและเข้าใจง่าย
+    คุณเป็นนักวิจารณ์ดนตรี AI โปรดเขียนคำอธิบายสั้นๆ (ไม่เกิน 3-4 ประโยค) สำหรับเพลงนี้:
 
     - ชื่อเพลง: {song_title}
     - ศิลปิน: {artist_name}
-    - อารมณ์หลักที่ตรวจพบจากเนื้อเพลง: {moods_text}
+    - อัลบั้ม: {album_name}
+    - ปีที่ปล่อย: {release_year}
 
     **คำสั่ง:**
-    โปรดเขียนสรุปเพลงนี้ใน **1 ย่อหน้าที่อ่านง่าย (ประมาณ 4-5 ประโยค)** โดยให้ครอบคลุมถึง แนวเพลง, อารมณ์โดยรวม, และลักษณะเด่นของดนตรีหรือเนื้อหา ไม่ต้องแยกเป็นข้อๆ
+    1.  นี่เป็นเพลงแนวไหน? (เช่น J-Pop, Rock, Ballad)
+    2.  เพลงนี้มาจากอัลบั้ม, อนิเมะ, หรือภาพยนตร์อะไรหรือไม่? (ถ้ามีข้อมูล)
+    3.  อธิบายลักษณะเด่นของเพลง (เช่น "เป็นเพลงชิลๆ", "เพลงเศร้าที่ทรงพลัง", "เพลงจังหวะสนุกสนาน")
+    
+    โปรดเขียนพรรณนาให้น่าฟังและกระชับ จบใน 1 ย่อหน้า
     """
     
     try:
         response = await TEXT_MODEL.generate_content_async(prompt_content)
-        combined_analysis = { "gemini_analysis": response.text, "predicted_moods": predicted_moods }
+        
+        # *** 3. บันทึกเฉพาะ gemini_analysis เท่านั้น ***
+        # เราจะไม่บันทึก "predicted_moods" ที่มีปัญหาอีกต่อไป
+        combined_analysis = { "gemini_analysis": response.text }
+        
         await save_song_analysis_to_db(spotify_track_data, combined_analysis)
         return combined_analysis
     except Exception as e:
-        logging.error(f"Error calling Gemini API for song analysis: {e}", exc_info=True)
+        logging.error(f"Error calling Gemini API for new song analysis: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error analyzing song with Gemini API.")
 
 async def get_song_analysis_details(sp_client: spotipy.Spotify, song_uri: str) -> dict:
-    # (ฟังก์ชันนี้ไม่ได้รับผลกระทบ)
+    
+    # 1. พยายามดึงข้อมูลจาก Cache (ฐานข้อมูล) ก่อน
     analysis_data = await get_song_analysis_from_db(song_uri)
-    if analysis_data:
+    
+    # 2. [จุดแก้ไขที่สำคัญ] 
+    # ตรวจสอบว่าข้อมูลมีอยู่ และ "สมบูรณ์" (มี key 'gemini_analysis') หรือไม่
+    if analysis_data and 'gemini_analysis' in analysis_data:
+        logging.info(f"Cache HIT (Complete) for {song_uri}")
         return analysis_data
+
+    # 3. ถ้า Cache ไม่มี หรือ "ไม่สมบูรณ์" (เช่น มีแต่ predicted_moods)
+    # ให้ทำการสร้างข้อมูลวิเคราะห์ใหม่ทั้งหมด
+    logging.info(f"Cache MISS or Incomplete for {song_uri}. Generating new analysis...")
     try:
+        # ดึงข้อมูลเพลงล่าสุดจาก Spotify
         spotify_track_data = await get_spotify_track_data(sp_client, song_uri)
+        
+        # เรียกใช้ฟังก์ชัน analyze_and_store_song_analysis (ที่เราแก้ไขไปก่อนหน้า)
+        # เพื่อสร้างคำอธิบายจาก Gemini และบันทึกลง Cache
         return await analyze_and_store_song_analysis(spotify_track_data)
+        
     except Exception as e:
         logging.error(f"Failed to get song details for URI {song_uri}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get song details: {e}")
 
-async def summarize_playlist(sp_client: spotipy.Spotify, song_uris: list[str]) -> str:
-    # (ฟังก์ชันนี้ไม่ได้รับผลกระทบ เพราะใช้ TEXT_MODEL)
-    tasks = [get_song_analysis_details(sp_client, uri) for uri in song_uris]
+async def summarize_playlist(
+    sp_client: spotipy.Spotify, 
+    final_song_uris: list[str], 
+    seed_tracks: list[dict]
+) -> str:
+    
+    # 1. ดึงข้อมูล analysis ของ Final Playlist (เหมือนเดิม)
+    tasks = [get_song_analysis_details(sp_client, uri) for uri in final_song_uris]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    valid_analyses = [res for res in results if not isinstance(res, Exception)]
+    
+    # 2. แปลงข้อมูล Seed Tracks และ Final Tracks ให้เป็นข้อความ
+    seed_track_list_str = "\n".join([f"- {t['name']} by {t['artists'][0]['name']}" for t in seed_tracks if t and t.get('name') and t.get('artists')])
+    
+    final_track_list = []
+    for res in results:
+        if not isinstance(res, Exception) and res.get('spotify_track_object'):
+            track = res['spotify_track_object']
+            final_track_list.append(f"- {track['name']} by {track['artists'][0]['name']}")
+    final_track_list_str = "\n".join(final_track_list)
 
-    prompt = "นี่คือข้อมูลการวิเคราะห์ของแต่ละเพลงในเพลย์ลิสต์:\n\n"
-    for i, analysis in enumerate(valid_analyses):
-        prompt += f"--- เพลงที่ {i+1} ---\n{analysis.get('gemini_analysis', 'ไม่มีข้อมูล')}\n\n"
+    # 3. สร้าง Prompt ใหม่ตามที่คุณต้องการ
+    prompt = f"""
+    คุณเป็นภัณฑารักษ์ดนตรี (Music Curator) ผู้เชี่ยวชาญ
+    นี่คือข้อมูล 2 ส่วนที่ใช้ในการวิเคราะห์:
+
+    **ส่วนที่ 1: เพลงตั้งต้น (Seed Tracks) จากผู้ใช้**
+    (นี่คือเพลงที่แสดงถึงรสนิยมดั้งเดิมของผู้ใช้)
+    {seed_track_list_str}
+
+    **ส่วนที่ 2: เพลย์ลิสต์ที่ AI แนะนำ (Final Playlist)**
+    (นี่คือเพลงที่ AI เลือกมาให้)
+    {final_track_list_str}
+
+    **คำสั่งของคุณ (สำคัญมาก):**
+    โปรดเขียนบทสรุปเพลย์ลิสต์นี้โดยตอบคำถาม 2 ข้อต่อไปนี้:
     
-    prompt += """
-    **คำสั่งของคุณ:**
-    ในฐานะ 'ภัณฑารักษ์ดนตรี' (Music Curator) มืออาชีพ โปรดเขียนบทสรุปสำหรับเพลย์ลิสต์นี้
-    
-    **ห้ามทำ:** อย่าแค่สรุปว่าเพลย์ลิสต์นี้มีแนวเพลงหรืออารมณ์อะไรบ้าง
-    
-    **สิ่งที่ต้องทำ:**
-    1.  อธิบายว่า **ทำไม** เพลงเหล่านี้ถึงถูกจัดมาอยู่ด้วยกัน
-    2.  ค้นหา **"ธีมที่เชื่อมโยง" (Unifying Theme)** หรือ **"DNA ทางดนตรี" (Musical DNA)** ที่เป็นหัวใจหลักของเพลย์ลิสต์นี้
-    3.  อธิบายธีมนั้นให้ผู้ฟังเข้าใจอย่างชัดเจน (ตัวอย่างเช่น: "นี่คือเพลย์ลิสต์ที่รวมเพลง J-Pop Rock ที่มีพลังสูง โดดเด่นด้วยจังหวะที่หนักแน่นและเสียงร้องหญิงที่ทรงพลัง")
-    
+    1.  **เพลย์ลิสต์นี้เหมาะกับผู้ใช้ยังไง?** (อธิบายว่าเพลงใน Final Playlist มันเชื่อมโยงกับ Seed Tracks ของผู้ใช้อย่างไร เช่น "จากที่คุณชอบเพลง J-Pop ที่มีจังหวะ ... AI จึงได้เลือก...")
+    2.  **นี่คือเพลย์ลิสต์แบบไหน?** (ตั้งชื่อธีม หรืออธิบายภาพรวมของเพลย์ลิสต์นี้ เช่น "เพลย์ลิสต์สำหรับฟังตอนขับรถ", "รวมเพลงอนิเมะจังหวะมันส์ๆ", "เพลงชิลๆ สำหรับวันพักผ่อน")
+
     โปรดตอบเป็นภาษาไทยที่อ่านง่ายและลื่นไหล
     """
 
