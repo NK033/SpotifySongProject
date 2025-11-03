@@ -234,7 +234,8 @@ def calculate_mood_score(song_moods: list, user_profile: dict) -> float:
 
 async def analyze_and_cache_song_moods(
     spotify_track: dict, 
-    lang_hint: str | None = None  # <-- (ใหม่) รับ "คำใบ้" ด้านภาษา
+    lang_hint: str | None = None,  # <-- (ใหม่) รับ "คำใบ้" ด้านภาษา
+    use_gemini: bool = True       # <-- **ADD THIS LINE**
 ) -> tuple[dict | None, bool]:
     """
     (V4 - Genre-Aware Smart Strategy)
@@ -258,13 +259,20 @@ async def analyze_and_cache_song_moods(
     # 2. ใช้ "คำใบ้" (lang_hint) ที่ได้มาจาก Genre เพื่อเลือกแผน
     # (ถ้าไม่มีคำใบ้ ให้ default เป็น 'latin' -> Genius first)
     strategy = lang_hint if lang_hint else 'latin' 
-
-    if strategy == 'latin':
-        # Strategy 1: Latin (เพลงสากล) -> Genius ก่อน เพื่อความแม่นยำ
+    
+    if not use_gemini:
+        # ** STRATEGY 0: "Genius-Only" Mode (use_gemini=False) **
+        # This is the new logic path we are adding.
+        logging.info(f"Genius-Only strategy for '{track_name}'.")
+        lyrics = await get_lyrics(artist_name, track_name)
+    
+    elif strategy == 'latin':
+        # Strategy 1: Latin (เพลงสากล) -> Genius ก่อน
         logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Genius (Plan A)...")
         lyrics = await get_lyrics(artist_name, track_name)
         
-        if not lyrics or len(lyrics) < 50:
+        # Only try Gemini if it's enabled and lyrics are bad
+        if (not lyrics or len(lyrics) < 50) and use_gemini:
             # Fallback (Plan B): ถ้า Genius เฟล, ค่อยเรียก Gemini
             logging.warning(f"Genius failed for '{track_name}'. Trying Gemini (Plan B)...")
             rescued_data = await rescue_lyrics_with_gemini([spotify_track])
@@ -272,7 +280,8 @@ async def analyze_and_cache_song_moods(
             if key in rescued_data and rescued_data[key]:
                 lyrics = rescued_data[key]
     else:
-        # Strategy 2: CJK, Thai (เพลงเอเชีย) -> Gemini ก่อน เพื่อโอกาสหาเจอ
+        # Strategy 2: CJK, Thai (เพลงเอเชีย) -> Gemini ก่อน
+        # This whole block is skipped if use_gemini is False, which is correct
         logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Gemini (Plan A)...")
         rescued_data = await rescue_lyrics_with_gemini([spotify_track])
         key = f"{artist_name} - {track_name}"
@@ -417,24 +426,37 @@ async def get_intelligent_recommendations(
             if spotify_track['uri'] in blacklist_to_use:
                 return
             
-            lang = None
             track_name, artist = spotify_track.get('name', ''), spotify_track.get('artists', [{}])[0]
             artist_id, artist_name = artist.get('id'), artist.get('name', '')
             
-            if artist_id: # (FIX: 'unhashable type')
+            artist_genre_lang = None
+            
+            if artist_id:
                 try:
                     artist_details = await asyncio.to_thread(sp_client.artist, artist_id=artist_id)
                     if artist_details: 
-                        lang = _classify_lang_from_genres(artist_details.get('genres', []))
+                        artist_genre_lang = _classify_lang_from_genres(artist_details.get('genres', []))
                 except Exception: 
                     pass 
 
-            if lang is None:
-                lang = _detect_language_from_string(track_name, artist_name)
+            # Determine the song's language, prioritizing the reliable artist genre
+            song_lang = artist_genre_lang
+            if song_lang is None:
+                # Fallback to the unreliable title/string check
+                song_lang = _detect_language_from_string(track_name, artist_name)
             
-            if guardrail_language and lang != guardrail_language:
-                logging.warning(f"GUARDRAIL: Filtering out '{track_name}' (Lang: {lang})")
-                return
+            # --- [NEW SMART GUARDRAIL LOGIC] ---
+            if guardrail_language and song_lang != guardrail_language:
+                # The song language (e.g., 'latin') mismatches the profile (e.g., 'cjk').
+                # BUT, check for the "Artist Pass"
+                if artist_genre_lang == guardrail_language:
+                    logging.info(f"GUARDRAIL: [Artist Pass] Bypassing filter for '{track_name}' (Artist lang '{artist_genre_lang}' matches profile)")
+                else:
+                    # No pass. The artist's genre is also a mismatch. Filter it.
+                    logging.warning(f"GUARDRAIL: Filtering out '{track_name}' (Song Lang: {song_lang}, Artist Lang: {artist_genre_lang})")
+                    return
+            
+            lang = song_lang
             
             moods_tuple = await analyze_and_cache_song_moods(spotify_track, lang_hint=lang, use_gemini=False) # (FIX: ห้าม Gemini)
             moods = moods_tuple[0] 
