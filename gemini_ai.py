@@ -92,13 +92,40 @@ async def summarize_playlist(
     seed_tracks: list[dict]
 ) -> str:
     
-    tasks = [get_song_analysis_details(sp_client, uri) for uri in final_song_uris]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # === [FIX: Add BATCHING to prevent rate limits on TEXT_MODEL] ===
+    BATCH_SIZE = 5  # How many song analyses to run in parallel
+    DELAY_BETWEEN_BATCHES = 7 # Cooldown to prevent rate limit
+    
+    all_results = []
+    total_batches = (len(final_song_uris) + BATCH_SIZE - 1) // BATCH_SIZE
+    
+    logging.info(f"Starting playlist summary... processing {len(final_song_uris)} songs in {total_batches} batches.")
+
+    for i in range(0, len(final_song_uris), BATCH_SIZE):
+        current_batch_num = (i // BATCH_SIZE) + 1
+        batch_uris = final_song_uris[i:i + BATCH_SIZE]
+        logging.info(f"--- Summarizer: Processing analysis batch {current_batch_num}/{total_batches} ---")
+        
+        # 1. Create tasks for just this batch
+        tasks = [get_song_analysis_details(sp_client, uri) for uri in batch_uris]
+        # 2. Run the batch in parallel
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 3. Add results to the main list
+        all_results.extend(batch_results)
+
+        # 4. If not the last batch, sleep to cool down
+        if i + BATCH_SIZE < len(final_song_uris):
+            logging.info(f"--- Summarizer: Waiting {DELAY_BETWEEN_BATCHES}s before next batch... ---")
+            await asyncio.sleep(DELAY_BETWEEN_BATCHES)
+    
+    # === [END OF FIX] ===
+
     
     seed_track_list_str = "\n".join([f"- {t['name']} by {t['artists'][0]['name']}" for t in seed_tracks if t and t.get('name') and t.get('artists')])
     
     final_track_list = []
-    for res in results:
+    # Use the new 'all_results' list instead of 'results'
+    for res in all_results:
         if not isinstance(res, Exception) and res.get('spotify_track_object'):
             track = res['spotify_track_object']
             final_track_list.append(f"- {track['name']} by {track['artists'][0]['name']}")
@@ -126,6 +153,7 @@ async def summarize_playlist(
     """
 
     try:
+        # This final call is just one request, so it's safe
         response = await TEXT_MODEL.generate_content_async(prompt)
         return response.text
     except Exception as e:
@@ -306,6 +334,7 @@ async def get_filler_tracks_with_lyrics(existing_tracks: list[dict], lang_guardr
     """
     if not existing_tracks: return []
     logging.info("--- Activating Gemini Playlist Filler (V9 - Niche-Aware)... ---")
+    await asyncio.sleep(7)
     track_list_str = "\n".join([f"- '{t['name']}' by {t['artists'][0]['name']}" for t in existing_tracks])
     
     # --- [ V9 PROMPT ] ---
