@@ -40,14 +40,6 @@ function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize }) {
               >
                 <i className="fas fa-thumbtack mr-1"></i> Pin Playlist
               </button>
-              
-              {/* ปุ่มใหม่สำหรับ Summarize */}
-              <button 
-                onClick={() => onSummarize(item)} // ส่ง "item" ทั้งหมดไป
-                className="text-xs py-1 px-3 rounded-full bg-purple-600 hover:bg-purple-700 text-white transition"
-              >
-                <i className="fas fa-magic mr-1"></i> สรุป (AI)
-              </button>
             </div>
           )}
         </div>

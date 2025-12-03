@@ -6,6 +6,7 @@ import LoadingOverlay from './components/LoadingOverlay';
 import SongDetailModal from './components/SongDetailModal';
 import RenameModal from './components/RenameModal';
 import ConfirmModal from './components/ConfirmModal';
+import LiveAgent from './components/LiveAgent';
 
 function App() {
   const {
@@ -107,6 +108,7 @@ function App() {
           onClose={() => setShowSongModal(false)}
         />
       )}
+      <LiveAgent />
     </div>
   );
 }

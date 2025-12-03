@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import RedirectResponse
-
+import custom_model
 from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import time
@@ -23,11 +23,11 @@ from recommender import get_intelligent_recommendations, update_user_profile_bac
 from gemini_ai import get_song_analysis_details, summarize_playlist,get_emotional_profile_from_gemini,get_gemini_seed_expansion
 from pydantic import BaseModel
 from typing import List
-from database import get_user_mood_profile, init_db, save_user_feedback, add_pinned_playlist, get_pinned_playlists_by_user
-
+import database
+import genius_api
 # (*** แก้ไข: Import ChatRequest จาก models ที่อัปเดตแล้ว ***)
 from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest, UpdatePlaylistRequest
-from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_user_top_tracks
+from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_user_top_tracks, get_current_playing_track
 
 
 # --- Logging Configuration ---
@@ -41,7 +41,7 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 # --- Local Imports ---
 from config import Config
-from database import init_db
+from database import add_pinned_playlist, get_pinned_playlists_by_user, get_user_mood_profile, init_db, save_user_feedback
 # (ลบ ChatRequest, ChatResponse ออกจากบรรทัดนี้ เพราะย้ายไปข้างบนแล้ว)
 from spotify_api import (
     create_spotify_client, 
@@ -492,6 +492,98 @@ async def delete_pinned_playlist_endpoint(pin_id: int, sp_client: spotipy.Spotif
         logging.error(f"ERROR deleting pinned playlist: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+def get_mood_notification_text(fingerprint: dict):
+    """แปลงค่าอารมณ์จากตัวเลข เป็นข้อความ Notification ที่น่าสนใจ"""
+    # เรียงลำดับอารมณ์จากมากไปน้อย
+    sorted_emotions = sorted(fingerprint.items(), key=lambda x: x[1], reverse=True)
+    
+    if not sorted_emotions:
+        return "🎵 เพลงนี้น่าสนใจดีนะครับ! ฟังเพลินๆ เลย"
+
+    dominant_emotion, score = sorted_emotions[0]
+    
+    # Mapping อารมณ์ -> ข้อความเชิญชวน (Notification Text)
+    # ตรงนี้คือ Rule-based ไม่เสีย Token Gemini
+    responses = {
+        'joy': "🔥 เพลงนี้เอเนอร์จี้ดีมาก! ดูคุณกำลังแฮปปี้นะ ให้ผมจัด Playlist สายปาร์ตี้ต่อเลยไหม?",
+        'sadness': "💧 เพลงเศร้าจัง... ถ้าอยากระบาย ผมหาเพลงแนวอกหักมารอไว้แล้วนะ หรือจะให้ฮีลใจดี?",
+        'anger': "💢 ดุดันมาก! ถ้าอยากระเบิดอารมณ์ต่อ เดี๋ยวผมจัดสายร็อคหนักๆ ให้ครับ",
+        'love': "💖 อินเลิฟอยู่แน่ๆ เพลงหวานเจี๊ยบเลย สนใจ Playlist เพลงรักเพิ่มไหม?",
+        'excitement': "🤩 จังหวะนี้ต้องไปให้สุด! ผมมีเพลง Hype กว่านี้แนะนำ สนใจไหม?",
+        'neutral': "🌿 ฟังชิลๆ สบายๆ ดีครับ ถ้าอยากฟังยาวๆ เดี๋ยวผมจัด Playlist แนวนี้รอไว้นะ",
+        'admiration': "✨ เพลงนี้ความหมายดีจังครับ ฟังแล้วรู้สึกมีกำลังใจขึ้นมาเลย",
+        'fear': "😨 บรรยากาศดูหลอนๆ นะครับ... ไหวไหม? ให้เปลี่ยนแนวไหมครับ?",
+        'amusement': "😄 เพลงสนุกดีนะครับ! ฟังแล้วอารมณ์ดีเลย"
+    }
+    
+    # คืนค่าข้อความตามอารมณ์ (ถ้าไม่มีใน list ให้ใช้ default)
+    return responses.get(dominant_emotion, f"เพลงนี้ให้อารมณ์ {dominant_emotion} สินะครับ น่าสนใจมาก! ลองฟังแนวนี้ต่อไหม?")
+
+   # 2. API Endpoint หลัก (The Brain)
+@app.get("/api/live-status")
+async def get_live_status(sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    """
+    API นี้จะถูก Frontend เรียกทุก 5 วินาที เพื่อเช็คว่าต้องเด้ง Notification ไหม
+    """
+    # 1. เช็คสถานะ Spotify (ใช้ sp_client ที่ Login แล้ว)
+    # เราใช้ asyncio.to_thread เพื่อไม่ให้ Server ค้างตอนรอ Spotify ตอบกลับ
+    track_info = await asyncio.to_thread(get_current_playing_track, sp_client)
+    
+    if not track_info:
+        return {"is_playing": False}
+
+    uri = track_info['spotify_uri']
+    
+    # 2. เช็ค Cache ใน Database ก่อน (เพื่อความเร็ว & ประหยัด)
+    cached_analysis = await database.get_song_analysis_from_db(uri)
+    
+    emotional_fingerprint = {}
+    
+    if cached_analysis and 'mood' in cached_analysis:
+        print(f"✨ Cache Hit: {track_info['name']}")
+        emotional_fingerprint = cached_analysis['mood']
+    else:
+        print(f"🔍 Analyzing New Track: {track_info['name']}")
+        
+        # 3. ถ้าเป็นเพลงใหม่ -> ดึงเนื้อเพลง + วิเคราะห์โมเดล
+        lyrics = await genius_api.get_lyrics(track_info['name'], track_info['artist'])
+        
+        if lyrics:
+            # ใช้ Model ของคุณวิเคราะห์ (ไม่เสีย Token)
+            emotional_fingerprint = custom_model.predict_moods(lyrics)
+            
+            # บันทึกผลลง Database
+            analysis_data = {
+                "mood": emotional_fingerprint,
+                "lyrics_snippet": lyrics[:100] + "..."
+            }
+            mock_track_data = {
+                'uri': uri, 
+                'name': track_info['name'], 
+                'artists': [{'name': track_info['artist']}], 
+                'album': {'name': track_info['album']}
+            }
+            await database.save_song_analysis_to_db(mock_track_data, analysis_data)
+        else:
+            # กรณีหาเนื้อเพลงไม่เจอ
+            return {
+                **track_info,
+                "notification": "เพลงนี้เพราะดีครับ! เสียดายผมแกะเนื้อไม่ออก แต่ถ้าชอบแนวนี้ เดี๋ยวผมจัดให้ตามชื่อศิลปินเลย!"
+            }
+
+    # 4. สร้างข้อความ Notification
+    noti_text = get_mood_notification_text(emotional_fingerprint)
+
+    # ส่งข้อมูลกลับไปให้ Frontend
+    return {
+        "is_playing": True,
+        "track_id": uri,
+        "name": track_info['name'],
+        "artist": track_info['artist'],
+        "cover": track_info['cover'],
+        "notification": noti_text, 
+        "mood_data": emotional_fingerprint 
+    }
 
 # --- NEW ENDPOINT: To update (rename or change songs) a pinned playlist ---
 @app.put("/pinned_playlists/{pin_id}")
@@ -581,3 +673,4 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
     
 
 app.mount("/", StaticFiles(directory="my-react-playlist-app/dist", html=True), name="static-react-app")
+

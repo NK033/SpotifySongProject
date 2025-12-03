@@ -1,4 +1,5 @@
 import React from 'react';
+import '../App.css'; // ต้องมั่นใจว่า import App.css เข้ามา
 
 function SuggestedPrompts({ prompts, onPromptClick }) {
   
@@ -7,18 +8,21 @@ function SuggestedPrompts({ prompts, onPromptClick }) {
   }
 
   return (
-    <div className="flex flex-wrap gap-2 justify-center p-4">
-      {/* (*** แก้ไข: เปลี่ยน 'prompt' เป็น 'promptObj' ***) */}
-      {prompts.map((promptObj) => ( 
-        // (*** แก้ไข: ใช้ .prompt เป็น key ***)
-        <button
-          key={promptObj.prompt}
-          className="suggested-prompt-btn"
-          onClick={() => onPromptClick(promptObj)}
-        >
-          {promptObj.prompt} {/* (*** แก้ไข: แสดงข้อความจาก .prompt ***) */}
-        </button>
-      ))}
+    // เปลี่ยนจาก flex... เป็นชื่อ class ปกติ
+    <div className="suggested-prompts-container">
+      {prompts.map((promptObj, index) => {
+        const label = promptObj.prompt || "ตัวเลือก";
+        return (
+          <button
+            key={`${label}-${index}`}
+            // เปลี่ยน class ให้เป็นชื่อที่เราจะไปเขียน CSS
+            className="suggested-prompt-btn"
+            onClick={() => onPromptClick(promptObj)}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }

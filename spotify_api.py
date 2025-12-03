@@ -10,7 +10,7 @@ import logging # (เพิ่ม logging)
 
 from config import Config
 
-SPOTIFY_SCOPES = "user-read-private user-read-email playlist-modify-public playlist-modify-private user-library-read user-top-read user-read-recently-played"
+SPOTIFY_SCOPES = "user-read-private user-read-email playlist-modify-public playlist-modify-private user-library-read user-top-read user-read-recently-played user-read-currently-playing"
 
 # --- ฟังก์ชันจัดการการยืนันตัวตน ---
 
@@ -44,6 +44,61 @@ async def get_spotify_token(code: str) -> dict:
 
 # --- ฟังก์ชันสร้างไคลเอนต์อัจฉริยะ ---
 
+# --- [NEW FUNCTION] Auto preloading song details with Gemini ---
+# --- [NEW FUNCTION] Auto preloading song details with Gemini ---
+async def preload_gemini_details(sp_client: spotipy.Spotify, tracks: list[dict]):
+    """
+    โหลดรายละเอียดเพลง (Gemini analysis) แบบอัตโนมัติให้ทุกเพลงใน background
+    ใช้ asyncio.gather เพื่อรันพร้อมกัน (batch-safe)
+    """
+    if not tracks:
+        return
+
+    logging.info(f"🚀 Auto-preloading Gemini Details for {len(tracks)} tracks...")
+
+    tasks = []
+    for t in tracks:
+        if t and t.get("uri"):
+            tasks.append(get_song_analysis_details(sp_client, t["uri"]))
+
+    try:
+        # รันพร้อมกันแบบไม่ block ฟังก์ชันหลัก
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logging.info("✅ All Gemini details preloaded successfully.")
+    except Exception as e:
+        logging.error(f"❌ Error during Gemini auto-preload: {e}", exc_info=True)
+
+def get_current_playing_track(sp):
+    """
+    ดึงข้อมูลเพลงที่กำลังเล่นอยู่ (Metadata เท่านั้น ไม่มีการวิเคราะห์ Audio Features)
+    คืนค่า: Dict ข้อมูลเพลง หรือ None ถ้าไม่ได้เล่นเพลงอยู่
+    """
+    try:
+        # เรียก API ของ Spotify เพื่อดู Status ปัจจุบัน
+        current = sp.current_user_playing_track()
+        
+        # ถ้าไม่มีเพลงเล่นอยู่ หรือ User กด Pause
+        if not current or not current['is_playing']:
+            return None
+
+        item = current['item']
+        # ป้องกันกรณีเป็น Podcast หรือ Local file ที่ไม่มี URI
+        if not item or 'uri' not in item: 
+            return None
+
+        # คัดมาเฉพาะข้อมูลที่จำเป็น
+        return {
+            "is_playing": True,
+            "spotify_uri": item['uri'],
+            "name": item['name'],
+            "artist": item['artists'][0]['name'],
+            "album": item['album']['name'],
+            "cover": item['album']['images'][0]['url'] if item['album']['images'] else None,
+            "progress_ms": current['progress_ms'] # เผื่อใช้คำนวณว่าฟังจบหรือยัง
+        }
+    except Exception as e:
+        print(f"Error getting current track: {e}")
+        return None
 def create_spotify_client(token_info: dict) -> spotipy.Spotify:
     """
     (V-Final) สร้าง Spotipy client และแก้ปัญหา Proxy/ConnectionError
@@ -135,15 +190,6 @@ async def get_user_saved_tracks(sp_client: spotipy.Spotify, limit: int = 8) -> l
 
 
 # --- [ แก้ไขใหม่ทั้งหมด ] ---
-# ในไฟล์ spotify_api.py
-
-# (อย่าลืมเพิ่ม import logging ถ้ายังไม่มี)
-import logging
-
-# ... (โค้ดส่วนอื่น ๆ ของ spotify_api.py) ...
-
-
-# --- [ แก้ไขใหม่ทั้งหมด ] ---
 async def get_fallback_recommendations(sp_client: spotipy.Spotify) -> list[dict]:
     """
     (V-Final, Dynamic Fallback)
@@ -200,26 +246,3 @@ async def get_fallback_recommendations(sp_client: spotipy.Spotify) -> list[dict]
     logging.error("All fallback plans failed. Returning empty list.")
     return []
 
-# --- [NEW FUNCTION] Auto preloading song details with Gemini ---
-# --- [NEW FUNCTION] Auto preloading song details with Gemini ---
-async def preload_gemini_details(sp_client: spotipy.Spotify, tracks: list[dict]):
-    """
-    โหลดรายละเอียดเพลง (Gemini analysis) แบบอัตโนมัติให้ทุกเพลงใน background
-    ใช้ asyncio.gather เพื่อรันพร้อมกัน (batch-safe)
-    """
-    if not tracks:
-        return
-
-    logging.info(f"🚀 Auto-preloading Gemini Details for {len(tracks)} tracks...")
-
-    tasks = []
-    for t in tracks:
-        if t and t.get("uri"):
-            tasks.append(get_song_analysis_details(sp_client, t["uri"]))
-
-    try:
-        # รันพร้อมกันแบบไม่ block ฟังก์ชันหลัก
-        await asyncio.gather(*tasks, return_exceptions=True)
-        logging.info("✅ All Gemini details preloaded successfully.")
-    except Exception as e:
-        logging.error(f"❌ Error during Gemini auto-preload: {e}", exc_info=True)
