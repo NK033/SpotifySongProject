@@ -16,6 +16,7 @@ class Config:
     GENIUS_API_KEY: str = os.getenv("GENIUS_API_KEY") # เพิ่ม Genius API Key
     LASTFM_API_KEY: str = os.getenv("lastfm_api_key") # เพิ่ม Last.fm API Key
     LASTFM_API_SECRET: str = os.getenv("lastfm_api_key_secret") # เพิ่ม Last.fm API Secret
+    GROQ_API_KEY: str = os.getenv("groq_api_key")
 
     @classmethod
     def validate(cls):
