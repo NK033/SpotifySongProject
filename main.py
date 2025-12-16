@@ -6,7 +6,7 @@ import spotipy
 import google.generativeai as genai
 # (*** เพิ่ม 1: Import Tool และ FunctionCallable ***)
 from google.generativeai.types import Tool, FunctionDeclaration
-
+from groq import AsyncGroq
 from fastapi import FastAPI, Header, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -29,7 +29,11 @@ import genius_api
 # (*** แก้ไข: Import ChatRequest จาก models ที่อัปเดตแล้ว ***)
 from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest, UpdatePlaylistRequest
 from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_user_top_tracks, get_current_playing_track
-
+from groq_ai import (
+    groq_client, SMART_MODEL, FAST_MODEL, 
+    GROQ_TOOLS,  # <--- เพิ่มตัวนี้
+    get_song_analysis_details_groq, summarize_playlist_groq, get_emotional_profile_from_groq
+)
 IS_SYSTEM_BUSY = False
 
 # --- Logging Configuration ---

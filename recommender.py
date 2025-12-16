@@ -24,7 +24,13 @@ from database import (
     get_user_feedback, get_user_mood_profile_with_timestamp
 )
 from gemini_ai import get_gemini_seed_expansion
-
+from groq_ai import (
+    preload_groq_details, 
+    rescue_lyrics_with_groq, 
+    get_filler_tracks_groq, 
+    get_seed_expansion_groq,
+    get_emotional_profile_from_groq
+)
 # --- (Helper 1: ตรวจจับภาษาจากตัวอักษร - ใช้เป็นแผนสำรอง) ---
 def _detect_language_from_string(track_name: str, artist_name: str) -> str:
     """
@@ -191,7 +197,7 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> d
 
     await asyncio.gather(*[get_initial_lyrics(track) for track in seed_tracks_list[:15]])
     
-    rescued_lyrics_dict = await rescue_lyrics_with_gemini(failed_tracks)
+    rescued_lyrics_dict = await rescue_lyrics_with_groq(failed_tracks)
     
     for track in failed_tracks:
         artist_name = track.get('artists', [{}])[0].get('name', 'N/A')
@@ -267,14 +273,14 @@ async def analyze_and_cache_song_moods(
         
         if (not lyrics or len(lyrics) < 50) and use_gemini:
             logging.warning(f"Genius failed for '{track_name}'. Trying Gemini (Plan B)...")
-            rescued_data = await rescue_lyrics_with_gemini([spotify_track])
+            rescued_data = await rescue_lyrics_with_groq([spotify_track])
             key = f"{artist_name} - {track_name}" # (Gemini rescue ยังอาจจะใช้ชื่อไม่สะอาด แต่นั่นคือ Plan B)
             if key in rescued_data and rescued_data[key]:
                 lyrics = rescued_data[key]
     else:
         # Strategy 2: CJK, Thai -> Gemini ก่อน
         logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Gemini (Plan A)...")
-        rescued_data = await rescue_lyrics_with_gemini([spotify_track])
+        rescued_data = await rescue_lyrics_with_groq([spotify_track])
         key = f"{artist_name} - {track_name}"
         
         if key in rescued_data and rescued_data[key]:
@@ -403,7 +409,7 @@ async def get_intelligent_recommendations(
     logging.info(f"--- 🧬 Calling Gemini Seed Expansion ---")
     
     # เราใช้ user_seed_tracks (ซึ่งรวม Top+Recent+Liked) เพื่อให้ Gemini มี context ที่ดีที่สุด
-    gemini_candidates = await get_gemini_seed_expansion(user_seed_tracks, user_message)
+    gemini_candidates = await get_seed_expansion_groq(user_seed_tracks, user_message)
 
     if not gemini_candidates:
         logging.error("Gemini Seed Expansion found 0 candidates. Using fallback.")
@@ -523,7 +529,7 @@ async def get_intelligent_recommendations(
     if tracks_failed_genius:
         logging.info(f"Calling Gemini (Plan B) in one batch for {len(tracks_failed_genius)} tracks...")
         try:
-            rescued_lyrics_map = await rescue_lyrics_with_gemini(tracks_failed_genius)
+            rescued_lyrics_map = await rescue_lyrics_with_groq(tracks_failed_genius)
             
             for spotify_track in tracks_failed_genius:
                 artist_name = spotify_track.get('artists', [{}])[0].get('name', 'N/A')
@@ -648,7 +654,7 @@ async def get_intelligent_recommendations(
             # ใช้ dominant_language_for_prompting เพื่อบอก AI ว่าจะเอาเพลงภาษาอะไร
             lang_code_for_prompt = dominant_language_for_prompting if dominant_language_for_prompting else 'latin'
             
-            filler_gemini_results = await get_filler_tracks_with_lyrics(
+            filler_gemini_results = await get_filler_tracks_groq(
                 seed_tracks_for_filler,
                 lang_code_for_prompt
             )
@@ -681,7 +687,7 @@ async def get_intelligent_recommendations(
         if tracks_failed_genius_filler:
             logging.info(f"Calling Gemini (Plan B) in one batch for {len(tracks_failed_genius_filler)} filler tracks...")
             try:
-                rescued_lyrics_map_filler = await rescue_lyrics_with_gemini(tracks_failed_genius_filler)
+                rescued_lyrics_map_filler = await rescue_lyrics_with_groq(tracks_failed_genius_filler)
                 
                 for spotify_track in tracks_failed_genius_filler:
                     artist_name = spotify_track.get('artists', [{}])[0].get('name', 'N/A')
@@ -736,7 +742,7 @@ async def get_intelligent_recommendations(
         logging.info(f"  {i+1}. (Score: {track['ai_analysis']['mood_score']:.4f}) '{track['name']}' by {track['artists'][0]['name']}")
 
 # 🔥 NEW: auto preload song details
-    await preload_gemini_details(sp_client, final_playlist)
+    await preload_groq_details(sp_client, final_playlist)
 
     return final_playlist
 
