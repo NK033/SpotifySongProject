@@ -436,12 +436,24 @@ async def get_intelligent_recommendations(
             
             # --- [FIX V19: ค้นหา Track Object ถ้ามันไม่มี (มาจาก Gemini)] ---
             if not spotify_track:
-                query = f"track:{track_info.get('title')} artist:{track_info.get('artist')}"
-                # ใช้ await เดียว ไม่ต้อง to_thread เพราะ search_spotify_songs เป็น async อยู่แล้ว
+                title = track_info.get('title', '')
+                artist = track_info.get('artist', '')
+
+                # 1. แผน A: ค้นหาแบบเจาะจง (Strict Search)
+                query = f"track:{title} artist:{artist}"
                 spotify_results = await search_spotify_songs(sp_client, query, limit=1)
+                
+                # 2. แผน B: ถ้าไม่เจอ ให้ค้นหาแบบกว้าง (Loose Search)
+                if not spotify_results:
+                    logging.info(f"Strict search failed for '{title}'. Trying loose search...")
+                    # เอาชื่อเพลงกับศิลปินมาต่อกันเลย ให้ Spotify ช่วยเดา
+                    loose_query = f"{title} {artist}"
+                    spotify_results = await search_spotify_songs(sp_client, loose_query, limit=1)
+
                 if not spotify_results: 
-                    logging.warning(f"Could not find Spotify track for: {track_info.get('title')} by {track_info.get('artist')}")
-                    return # ออกจาก task นี้ถ้าหาเพลงไม่เจอ
+                    logging.warning(f"Could not find Spotify track for: {title} by {artist} (Both Strict & Loose search failed)")
+                    return # ยอมแพ้จริงๆ
+                
                 spotify_track = spotify_results[0]
             # --- [END FIX V19] ---
             

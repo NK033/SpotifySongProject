@@ -13,26 +13,37 @@ from spotify_api import get_spotify_track_data
 
 # === Centralized Model Configuration (FIXED) ===
 TEXT_MODEL = genai.GenerativeModel(
-    'gemini-2.5-flash',  # <-- Higher quality for descriptions
+    'gemini-3-pro-preview',  # <-- Higher quality for descriptions
     system_instruction="คุณคือผู้ช่วยและนักวิจารณ์ดนตรีที่เชี่ยวชาญ สามารถวิเคราะห์เพลงได้อย่างแม่นยำและเขียนอธิบายได้อย่างเป็นธรรมชาติ"
 )
 
 JSON_MODEL = genai.GenerativeModel(
-    'gemini-2.0-flash-lite',  # <-- Higher RPM for batching
+    'gemini-3-pro-preview',  # <-- Higher RPM for batching
     generation_config={"response_mime_type": "application/json"}
 )
 # =======================================
 
-# --- [ ฟังก์ชันฆ่าเชื้อ JSON ] ---
+# --- [ ฟังก์ชันฆ่าเชื้อ JSON (ฉบับอัปเกรด) ] ---
 def _sanitize_json_string(json_str: str) -> str:
     """
-    พยายามแก้ไขอักขระ \ (backslash) ที่ผิดพลาดซึ่ง Gemini สร้างขึ้น
+    พยายามแก้ไขอักขระผิดพลาดเพื่อให้ json.loads ทำงานได้
     """
     try:
-        return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', json_str)
+        # 1. ลบ Markdown Code blocks (```json ... ```) ถ้า regex จับมาเกิน
+        json_str = re.sub(r'^```json\s*', '', json_str, flags=re.MULTILINE)
+        json_str = re.sub(r'^```\s*', '', json_str, flags=re.MULTILINE)
+        json_str = re.sub(r'```$', '', json_str, flags=re.MULTILINE)
+        
+        # 2. แก้ Backslash ที่ชอบเกินมา (เช่น \ ตามด้วยตัวอักษรแปลกๆ)
+        json_str = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', json_str)
+        
+        # 3. ลบ Control Characters ที่มองไม่เห็น (เช่น line break ผิดที่)
+        json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
+        
+        return json_str.strip()
     except Exception:
         return json_str
-# --- [ จบฟังก์ชันใหม่ ] ---
+# --- [ จบฟังก์ชัน ] ---
 
 
 async def analyze_and_store_song_analysis(spotify_track_data: dict) -> dict:
@@ -210,6 +221,9 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
         Only suggest mainstream songs if they are a perfect fit for this specific niche.
 
     5.  **Provide Reasoning:** FOR EACH SONG, you MUST provide a "lyrics_summary" or "reasoning" (in English or Thai) that explains WHY this song fits the theme and the niche.
+    **IMPORTANT:** Do NOT use double quotes (") inside the reasoning text. Use single quotes (') instead if needed.
+    
+    Return ONLY a valid JSON list of objects.
     
     Return ONLY a valid JSON list of objects.
     Example: [
@@ -229,7 +243,8 @@ async def get_gemini_seed_expansion(top_tracks: list[dict], user_message: str) -
             return []
             
         sanitized_json_string = _sanitize_json_string(json_match.group(0))
-        json_data = json.loads(sanitized_json_string)
+        # เพิ่ม strict=False เพื่อให้ยอมรับอักขระพิเศษบางอย่างได้มากขึ้น
+        json_data = json.loads(sanitized_json_string, strict=False)
         
         if isinstance(json_data, list):
             valid_candidates = [
@@ -284,12 +299,14 @@ async def rescue_lyrics_with_gemini(failed_tracks: list[dict]) -> dict:
         **Response Format Requirement (Crucial):**
         - You MUST respond with a perfectly structured JSON object.
         - The key for each entry must be the "id" from the input (e.g., "track_1", "track_2").
-        - The value must be a single string containing the full lyrics, or "" if not found.
+        - The value must be a single string containing the full lyrics.
+        - **IMPORTANT:** Use literal '\\n' for newlines within the lyrics string. Do not break the JSON structure.
+        - If lyrics are not found, use "".
         - Do NOT summarize or translate.
         
         **Example Response:**
         {{
-          "track_1": "Full lyrics for the first song...",
+          "track_1": "Line 1\\nLine 2\\nLine 3",
           "track_2": ""
         }}
         """

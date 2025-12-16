@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import RedirectResponse
 import custom_model
+from groq import AsyncGroq
 from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import time
@@ -29,6 +30,7 @@ import genius_api
 from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest, UpdatePlaylistRequest
 from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_user_top_tracks, get_current_playing_track
 
+IS_SYSTEM_BUSY = False
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -62,6 +64,8 @@ from recommender import (
 Config.validate()
 genai.configure(api_key=Config.GEMINI_API_KEY)
 app = FastAPI()
+groq_client = AsyncGroq(api_key=Config.GROQ_API_KEY) 
+SMART_MODEL = "openai/gpt-oss-120b" # หรือ ID ที่คุณเลือก
 
 # --- Model ใหม่สำหรับ Request สร้าง Playlist ---   
 class CreatePlaylistRequest(BaseModel):
@@ -97,9 +101,7 @@ async def get_spotify_client(
         "scope": SPOTIFY_SCOPES
     }
     
-    # ลบค่า None ออกไปก่อนส่งให้ Spotipy <-- ต้องลบหรือยกเลิกโค้ดส่วนนี้!
-    # token_info = {k: v for k, v in token_info.items() if v is not None} <--- ลบทิ้ง
-    
+
     if x_refresh_token:
         token_info["refresh_token"] = x_refresh_token
     
@@ -109,7 +111,7 @@ async def get_spotify_client(
     return create_spotify_client(token_info)
 
 
-@app.get("/callback")
+@app.get("/callback")   
 # --- 1. เพิ่ม background_tasks เข้าไปในฟังก์ชัน ---
 async def spotify_callback_endpoint(request: Request, code: str, background_tasks: BackgroundTasks):
     try:
@@ -124,7 +126,8 @@ async def spotify_callback_endpoint(request: Request, code: str, background_task
         if user_id:
             # สั่งให้เริ่มวิเคราะห์โปรไฟล์ของผู้ใช้คนนี้ทันทีในเบื้องหลัง
             logging.info(f"User {user_id} logged in. Triggering background profile analysis.")
-            background_tasks.add_task(update_user_profile_background, temp_sp_client, user_id)
+            # แก้เป็น: ส่ง tokens (ที่เป็น dict) เข้าไปแทน
+            background_tasks.add_task(update_user_profile_background, tokens, user_id)
         # --- จบส่วนการทำงานเบื้องหลัง ---
 
         # ส่งผู้ใช้กลับไปที่หน้าแอปหลักพร้อม token (เหมือนเดิม)
@@ -233,6 +236,8 @@ async def chat_endpoint(
     background_tasks: BackgroundTasks, 
     sp_client: spotipy.Spotify = Depends(get_spotify_client)
 ):
+    global IS_SYSTEM_BUSY
+
     try:
         user_message = chat_request.message
         
@@ -241,7 +246,7 @@ async def chat_endpoint(
             intent = chat_request.intent.strip().casefold()
             logging.info(f"User Intent (from Frontend): '{intent}'")
         else:
-            intent_model = genai.GenerativeModel("gemini-2.0-flash")
+            intent_model = genai.GenerativeModel("gemini-3-pro-preview")
             intent_prompt = f"""Analyze the user's request. What is the user's primary intent?
             Choose ONE of the following options:
             1. "get_recommendations": For PERSONALIZED suggestions based on the user's taste.
@@ -270,85 +275,94 @@ async def chat_endpoint(
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
             
+            
+            
             user_profile = await get_user_profile(sp_client)
             user_id = user_profile.get('id')
 
-            if user_id and sp_client.auth_manager.cache_handler.get_cached_token():
-                token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
-                background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
+            IS_SYSTEM_BUSY = True
+            try:
+                if user_id and sp_client.auth_manager.cache_handler.get_cached_token():
+                    token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
+                    background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
 
-            logging.info("Executing intelligent recommendation path (V7 - Generic Bypass).") # <--- (V7)
-            
-            historical_profile = await get_user_mood_profile(user_id)
-            if not historical_profile:
-                logging.warning(f"No cached profile for {user_id}. Building for the first time...")
-                from recommender import build_user_mood_profile
-                historical_profile = await build_user_mood_profile(sp_client, user_id)
+                logging.info("Executing intelligent recommendation path (V7 - Generic Bypass).") # <--- (V7)
+                
+                historical_profile = await get_user_mood_profile(user_id)
                 if not historical_profile:
-                     return ChatResponse(response="ขออภัยค่ะ ฉันยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อยนะคะ")
+                    logging.warning(f"No cached profile for {user_id}. Building for the first time...")
+                    from recommender import build_user_mood_profile
+                    historical_profile = await build_user_mood_profile(sp_client, user_id)
+                    if not historical_profile:
+                        return ChatResponse(response="ขออภัยค่ะ ฉันยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อยนะคะ")
 
-            # --- [ FIX: ตรรกะ "Bypass" ที่เราคุยกัน ] ---
-            
-            # 1. ตรวจสอบคำขอ "ทั่วไป" (Generic) ก่อน
-            generic_prompts = [
-                "🎵 แนะนำเพลงส่วนตัวให้หน่อย", 
-                "แนะนำเพลง", 
-                "เพลงแนะนำ", 
-                "ขอเพลงหน่อย", 
-                "หาเพลง"
-            ]
-            
-            emotional_profile = {} # 2. ตั้งค่าเริ่มต้นเป็น Dict ว่าง
-            
-            if user_message in generic_prompts:
-                # 3. ถ้าเป็นคำขอทั่วไป -> ไม่ต้องวิเคราะห์อารมณ์
-                logging.info(f"Generic request detected. Using PURE User Taste Profile.")
-                # (ปล่อยให้ emotional_profile = {} ว่างไว้)
-            else:
-                # 4. ถ้าเป็นคำขอเฉพาะ (เช่น "หาเพลงเศร้า") ค่อยวิเคราะห์อารมณ์
-                logging.info(f"Specific request detected. Analyzing request emotion...")
-                emotional_profile = await get_mood_profile_from_message(user_message)
-                is_highly_neutral = True
+                # --- [ FIX: ตรรกะ "Bypass" ที่เราคุยกัน ] ---
                 
-                if emotional_profile:
-                    for mood, score in emotional_profile.items():
-                        if mood != 'neutral' and score > 0.3:
-                            is_highly_neutral = False
-                            break
+                # 1. ตรวจสอบคำขอ "ทั่วไป" (Generic) ก่อน
+                generic_prompts = [
+                    "🎵 แนะนำเพลงส่วนตัวให้หน่อย", 
+                    "แนะนำเพลง", 
+                    "เพลงแนะนำ", 
+                    "ขอเพลงหน่อย", 
+                    "หาเพลง"
+                ]
                 
-                if is_highly_neutral:
-                    logging.warning(f"'predict_moods' failed to understand '{user_message}'. Falling back to Gemini Translator.")
-                    emotional_profile = await get_emotional_profile_from_gemini(user_message)
+                emotional_profile = {} # 2. ตั้งค่าเริ่มต้นเป็น Dict ว่าง
+                
+                if user_message in generic_prompts:
+                    # 3. ถ้าเป็นคำขอทั่วไป -> ไม่ต้องวิเคราะห์อารมณ์
+                    logging.info(f"Generic request detected. Using PURE User Taste Profile.")
+                    # (ปล่อยให้ emotional_profile = {} ว่างไว้)
+                else:
+                    # 4. ถ้าเป็นคำขอเฉพาะ (เช่น "หาเพลงเศร้า") ค่อยวิเคราะห์อารมณ์
+                    logging.info(f"Specific request detected. Analyzing request emotion...")
+                    emotional_profile = await get_mood_profile_from_message(user_message)
+                    is_highly_neutral = True
+                    
+                    if emotional_profile:
+                        for mood, score in emotional_profile.items():
+                            if mood != 'neutral' and score > 0.3:
+                                is_highly_neutral = False
+                                break
+                    
+                    if is_highly_neutral:
+                        logging.warning(f"'predict_moods' failed to understand '{user_message}'. Falling back to Gemini Translator.")
+                        emotional_profile = await get_emotional_profile_from_gemini(user_message)
+                
+                # --- (จบตรรกะ "Bypass") ---
+
+                recommended_songs = await get_intelligent_recommendations(
+                    sp_client, 
+                    user_id, 
+                    historical_profile,  # <--- รสนิยมในอดีต (เพียวๆ)
+                    emotional_profile,   # <--- อารมณ์ปัจจุบัน (ถ้ามี)
+                    user_message
+                )
+
+                if not recommended_songs:
+                    return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้")
+
+                # ... (โค้ดส่วน Presentation Model เหมือนเดิม) ...
+                presentation_model = genai.GenerativeModel("gemini-3-pro-preview")
+                song_titles = ", ".join([f"'{s['name']}'" for s in recommended_songs])
+                presentation_prompt = f"""
+                As an AI Musicologist, your task is to present a recommended playlist to the user.
+                The user's original request was: "{user_message}"
+                The playlist is based on this request, balanced against their listening habits, and contains: {song_titles}.
+                Instructions:
+                1.  Start with a concise, professional opening.
+                2.  Briefly summarize the overall mood or theme of the playlist (e.g., "upbeat and energetic," "introspective and melancholic," "a mix of modern rock and classic indie").
+                3.  Conclude by inviting the user to explore the songs further using the "Details" button for each track.
+                4.  Keep the entire response to a maximum of 3-4 sentences.
+                5.  Respond in Thai only.
+                """
+                final_response = await presentation_model.generate_content_async(presentation_prompt)
+                return ChatResponse(response=final_response.text, songs_found=recommended_songs)
             
-            # --- (จบตรรกะ "Bypass") ---
-
-            recommended_songs = await get_intelligent_recommendations(
-                sp_client, 
-                user_id, 
-                historical_profile,  # <--- รสนิยมในอดีต (เพียวๆ)
-                emotional_profile,   # <--- อารมณ์ปัจจุบัน (ถ้ามี)
-                user_message
-            )
-
-            if not recommended_songs:
-                return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้")
-
-            # ... (โค้ดส่วน Presentation Model เหมือนเดิม) ...
-            presentation_model = genai.GenerativeModel("gemini-2.0-flash")
-            song_titles = ", ".join([f"'{s['name']}'" for s in recommended_songs])
-            presentation_prompt = f"""
-            As an AI Musicologist, your task is to present a recommended playlist to the user.
-            The user's original request was: "{user_message}"
-            The playlist is based on this request, balanced against their listening habits, and contains: {song_titles}.
-            Instructions:
-            1.  Start with a concise, professional opening.
-            2.  Briefly summarize the overall mood or theme of the playlist (e.g., "upbeat and energetic," "introspective and melancholic," "a mix of modern rock and classic indie").
-            3.  Conclude by inviting the user to explore the songs further using the "Details" button for each track.
-            4.  Keep the entire response to a maximum of 3-4 sentences.
-            5.  Respond in Thai only.
-            """
-            final_response = await presentation_model.generate_content_async(presentation_prompt)
-            return ChatResponse(response=final_response.text, songs_found=recommended_songs)
+            finally: # <--- 4. คำสั่ง finally (ต้องอยู่ระดับเดียวกับ try)
+                # ✅ 5. เอาธงลง (ปิดไฟ) เสมอ ไม่ว่าจะ Error หรือ Return ก็ตาม
+                IS_SYSTEM_BUSY = False
+        
 
         # --- (Path 2: Top Charts - เหมือนเดิม) ---
         elif "get_top_charts" in intent:
@@ -366,7 +380,7 @@ async def chat_endpoint(
                 spotify_results = await search_spotify_songs(sp_client, query, limit=1)
                 if spotify_results:
                     chart_songs_on_spotify.append(spotify_results[0])
-            presentation_model = genai.GenerativeModel("gemini-2.0-flash")
+            presentation_model = genai.GenerativeModel("gemini-3-pro-preview")
             songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in chart_songs_on_spotify])
             presentation_prompt = f"นำเสนอรายการเพลงฮิตติดชาร์ตเหล่านี้ในภาษาที่เป็นกันเองและน่าสนใจ (ตอบเป็นภาษาไทย):\n\n{songs_for_prompt}"
             final_response = await presentation_model.generate_content_async(presentation_prompt)
@@ -378,7 +392,7 @@ async def chat_endpoint(
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะใช้เครื่องมือนี้ได้ค่ะ")
                 
             logging.info("Executing tool usage path (V2 - Fixed Schema).")
-            tool_model = genai.GenerativeModel("gemini-2.0-flash")
+            tool_model = genai.GenerativeModel("gemini-3-pro-preview")
 
             # --- (*** นี่คือ Schema ที่แก้ไขแล้ว ***) ---
             tool_definitions = Tool(
@@ -457,7 +471,7 @@ async def chat_endpoint(
         if "chat" in intent:
             logging.info("Executing general chat path.")
             chat_model = genai.GenerativeModel(
-                "gemini-2.0-flash",
+                "gemini-3-pro-preview",
                 system_instruction="You are a friendly AI music assistant. Your primary conversational language is Thai. Write all explanations and conversational parts in Thai. However, you MUST use the original language for proper nouns like song titles and artist names (e.g., 'Butter' by BTS, 'ดีใจด้วยนะ' by อิ้งค์ วรันธร). Do not translate these proper nouns.",
             )
             chat_response = await chat_model.generate_content_async(user_message)
@@ -467,6 +481,8 @@ async def chat_endpoint(
                 return ChatResponse(response="ขออภัยค่ะ ตอนนี้ AI ไม่สามารถสร้างคำตอบได้ ลองใหม่อีกครั้งนะคะ")
 
             return ChatResponse(response=chat_response.text)
+    
+
             
     except Exception as e:
         logging.critical(f"!!! An unhandled exception occurred in chat_endpoint: {e}")
@@ -525,6 +541,14 @@ async def get_live_status(sp_client: spotipy.Spotify = Depends(get_spotify_clien
     """
     API นี้จะถูก Frontend เรียกทุก 5 วินาที เพื่อเช็คว่าต้องเด้ง Notification ไหม
     """
+
+    global IS_SYSTEM_BUSY # <--- 1. เรียกใช้ตัวแปร Global
+    
+    # ✅ 2. เช็คก่อนเลยว่ายุ่งอยู่ไหม
+    if IS_SYSTEM_BUSY:
+        # ถ้ากำลังยุ่ง ให้ส่งค่าว่างๆ กลับไปเลย (Frontend จะได้ไม่กวน)
+        return {"is_playing": False}
+    
     # 1. เช็คสถานะ Spotify (ใช้ sp_client ที่ Login แล้ว)
     # เราใช้ asyncio.to_thread เพื่อไม่ให้ Server ค้างตอนรอ Spotify ตอบกลับ
     track_info = await asyncio.to_thread(get_current_playing_track, sp_client)
