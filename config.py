@@ -9,7 +9,7 @@ class Config:
     """
     Class สำหรับเก็บค่า Configuration ทั้งหมดจาก Environment Variables
     """
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
+    #GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
     SPOTIPY_CLIENT_ID: str = os.getenv("SPOTIPY_CLIENT_ID")
     SPOTIPY_CLIENT_SECRET: str = os.getenv("SPOTIPY_CLIENT_SECRET")
     SPOTIPY_REDIRECT_URI: str = os.getenv("SPOTIPY_REDIRECT_URI")
@@ -19,13 +19,13 @@ class Config:
     LASTFM_API_SECRET: str = os.getenv("lastfm_api_key_secret") # เพิ่ม Last.fm API Secret
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY") 
 
-    SMART_MODEL = "openai/gpt-oss-120b"
-
     @classmethod
     def validate(cls):
         """ตรวจสอบว่า Environment Variables ที่จำเป็นถูกตั้งค่าหรือไม่"""
-        if not cls.GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY environment variable not set.")
+        #if not cls.GEMINI_API_KEY:
+            #raise ValueError("GEMINI_API_KEY environment variable not set.")
+        if not cls.GROQ_API_KEY: # ✅ เช็ค Groq แทน
+             raise ValueError("GROQ_API_KEY environment variable not set.")
         if not cls.SPOTIPY_CLIENT_ID or not cls.SPOTIPY_CLIENT_SECRET or not cls.SPOTIPY_REDIRECT_URI:
             raise ValueError("Spotify API credentials (SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, SPOTIPY_REDIRECT_URI) not set.")
         if not cls.FRONTEND_APP_URL:

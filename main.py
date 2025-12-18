@@ -66,7 +66,6 @@ from recommender import (
 
 # --- Setup ---
 Config.validate()
-genai.configure(api_key=Config.GEMINI_API_KEY)
 app = FastAPI()
 groq_client = AsyncGroq(api_key=Config.GROQ_API_KEY) 
 SMART_MODEL = "openai/gpt-oss-120b" # หรือ ID ที่คุณเลือก
