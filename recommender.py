@@ -29,7 +29,8 @@ from groq_ai import (
     rescue_lyrics_with_groq, 
     get_filler_tracks_groq, 
     get_seed_expansion_groq,
-    get_emotional_profile_from_groq
+    get_emotional_profile_from_groq,
+    translate_lyrics_to_english_groq
 )
 # --- (Helper 1: ตรวจจับภาษาจากตัวอักษร - ใช้เป็นแผนสำรอง) ---
 def _detect_language_from_string(track_name: str, artist_name: str) -> str:

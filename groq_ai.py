@@ -226,7 +226,7 @@ async def get_seed_expansion_groq(top_tracks: list[dict], user_message: str) -> 
     Analyze these seed tracks: {seed_str}
     User Context: "{user_message}"
 
-    Goal: Suggest 20 NEW songs that fit the user's specific "Niche" (e.g. Anime OST, City Pop, T-Pop) and the Context.
+    Goal: Suggest 20 NEW songs(Do not repeat the song) that fit the user's specific "Niche" (e.g. Anime OST, City Pop, T-Pop) and the Context.
     
     Constraints:
     1. Output JSON ONLY. Format: list of objects with "artist", "title", "reason".
@@ -336,3 +336,43 @@ async def preload_groq_details(sp_client: spotipy.Spotify, tracks: list[dict]):
         await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
         logging.error(f"Preload failed: {e}")
+
+
+# เพิ่มลงใน groq_ai.py
+
+async def translate_lyrics_to_english_groq(lyrics: str, artist: str, track: str) -> str:
+    """
+    Universal Translator: แปลเนื้อเพลงทุกภาษา (ไทย, ญี่ปุ่น, Romaji, ฯลฯ) ให้เป็นภาษาอังกฤษ
+    เพื่อให้ Custom Model วิเคราะห์อารมณ์ได้แม่นยำที่สุด
+    """
+    # ตัดเนื้อเพลงบางส่วนถ้ามันยาวเกินไป (ประมาณ 1000 ตัวอักษร) เพื่อความเร็ว
+    short_lyrics = lyrics[:1000]
+
+    # 🔥 Prompt นี้สั่งให้เป็นเครื่องแปลภาษาโดยเฉพาะ
+    prompt = f"""
+    Act as a professional translator for music lyrics.
+    
+    Target: Translate the following lyrics into English.
+    
+    Song Context: "{track}" by "{artist}"
+    Input Lyrics:
+    {short_lyrics}
+    
+    Strict Rules:
+    1. If the lyrics are in Thai, Japanese (Kanji/Kana), Romaji, Korean, or any other language -> Translate to English.
+    2. If the lyrics are already in English -> Return them exactly as is.
+    3. Maintain the original meaning and emotion of the song.
+    4. OUTPUT ONLY THE ENGLISH LYRICS. No "Here is the translation", no explanations, no markdown.
+    """
+
+    try:
+        # ใช้ FAST_MODEL (Llama 3.3) เพราะเร็วและเก่งภาษามาก
+        translated_text = await _call_groq_api(
+            model=FAST_MODEL, 
+            messages=[{"role": "user", "content": prompt}], 
+            temperature=0.3 # ค่าต่ำเพื่อให้แปลตรงไปตรงมา ไม่แต่งเพิ่ม
+        )
+        return translated_text.strip()
+    except Exception as e:
+        logging.error(f"Universal Translation failed for {track}: {e}")
+        return lyrics # ถ้าแปลไม่ได้จริงๆ ให้ส่งค่าเดิมกลับไป
