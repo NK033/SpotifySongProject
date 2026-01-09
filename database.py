@@ -389,3 +389,32 @@ async def update_pinned_playlist(pin_id: int, user_id: str, new_name: str, new_s
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)
+
+async def get_all_analyzed_tracks() -> list[dict]:
+    """
+    ดึงข้อมูลเพลงทั้งหมดที่เคยวิเคราะห์แล้ว (URI และ Moods)
+    เพื่อนำมาเป็น 'Internal Candidates' (Strategy A)
+    """
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            # ดึง URI และ JSON
+            rows = cursor.execute("SELECT spotify_uri, analysis_json FROM song_analyses").fetchall()
+            
+            results = []
+            for row in rows:
+                try:
+                    analysis = json.loads(row['analysis_json'])
+                    if 'predicted_moods' in analysis:
+                        results.append({
+                            'uri': row['spotify_uri'],
+                            'moods': analysis['predicted_moods']
+                        })
+                except:
+                    continue
+            return results
+        finally:
+            conn.close()
+            
+    return await asyncio.to_thread(db_operation)

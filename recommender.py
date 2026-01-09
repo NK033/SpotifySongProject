@@ -9,6 +9,8 @@ from collections import Counter
 import numpy as np
 import random
 from spotify_api import create_spotify_client, get_fallback_recommendations
+from collections import defaultdict
+from lastfm_api import get_similar_tracks_lastfm, get_similar_artists_lastfm, get_artist_top_tracks_lastfm
 from gemini_ai import rescue_lyrics_with_gemini, get_filler_tracks_with_lyrics
 # Import local modules
 from spotify_api import (
@@ -21,7 +23,7 @@ from custom_model import predict_moods
 from database import (
     get_song_analysis_from_db, save_song_analysis_to_db, get_user_mood_profile, 
     save_user_mood_profile, save_recommendation_history, get_recommendation_history,
-    get_user_feedback, get_user_mood_profile_with_timestamp
+    get_user_feedback, get_user_mood_profile_with_timestamp,get_all_analyzed_tracks
 )
 from gemini_ai import get_gemini_seed_expansion
 from groq_ai import (
@@ -32,6 +34,42 @@ from groq_ai import (
     get_emotional_profile_from_groq,
     translate_lyrics_to_english_groq
 )
+
+async def find_best_matches_from_db(
+    sp_client: spotipy.Spotify,
+    target_profile: dict, 
+    blacklist_uris: set, 
+    limit: int = 5
+) -> list[dict]:
+    """
+    (Strategy A) ค้นหาเพลงจาก Database ของเราเอง
+    """
+    logging.info(f"--- 🏠 Searching Internal Database for matches (Limit: {limit}) ---")
+    all_analyzed = await get_all_analyzed_tracks()
+    if not all_analyzed: return []
+
+    candidates = []
+    for item in all_analyzed:
+        uri = item['uri']
+        if uri in blacklist_uris: continue
+            
+        score = calculate_cosine_similarity(target_profile, item['moods'])
+        candidates.append((uri, score))
+    
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    top_candidates = candidates[:limit]
+    
+    if not top_candidates: return []
+
+    top_uris = [c[0] for c in top_candidates]
+    try:
+        spotify_results = await asyncio.to_thread(sp_client.tracks, top_uris)
+        valid_tracks = [t for t in spotify_results.get('tracks', []) if t]
+        return valid_tracks
+    except Exception:
+        return []
+    
+
 # --- (Helper 1: ตรวจจับภาษาจากตัวอักษร - ใช้เป็นแผนสำรอง) ---
 def _detect_language_from_string(track_name: str, artist_name: str) -> str:
     """
@@ -293,6 +331,14 @@ async def analyze_and_cache_song_moods(
 
     # 3. ประมวลผลเนื้อเพลงที่หามาได้ (เหมือนเดิม)
     if lyrics and len(lyrics) > 50:
+        try:
+            # ส่งเนื้อเพลงไปให้ Groq แปลเป็นอังกฤษก่อนเสมอ (ไม่ว่าเป็นไทย/ญี่ปุ่น/Romaji)
+            # โมเดลจะได้เข้าใจได้แม่นยำที่สุด
+            logging.info(f"🌍 Translating lyrics for '{track_name}' to English context...")
+            lyrics = await translate_lyrics_to_english_groq(lyrics, artist_name, track_name)
+        except Exception as e:
+            logging.error(f"❌ Translation failed (Using original lyrics): {e}")
+            
         moods = predict_moods(lyrics)
         if moods:
             await save_song_analysis_to_db(spotify_track, {"predicted_moods": moods})
@@ -327,71 +373,32 @@ async def get_intelligent_recommendations(
     user_message: str
 ) -> list[dict]:
     """
-    (Hybrid V19 - Gemini-Expansion-Based Discovery)
+    (Hybrid V21 - Verified Cooperative)
+    - Discovery: Database + Last.fm (Cooperative Scope & Scan)
+    - Analysis: V19 Robust Logic (Strict/Loose Search + CV Fix + Genre Lang)
+    - Filler: Internal Loose Matches (No AI Hallucinations)
     """
     # --- Constants ---
     MINIMUM_PLAYLIST_SIZE = 10
     STRICT_SCORE_THRESHOLD = 0.45 
     LOOSE_SCORE_THRESHOLD = 0.25
-    MAX_FILLER_ITERATIONS = 3 
+    # MAX_FILLER_ITERATIONS = 3 # (V21 ไม่ใช้ลูป AI แล้ว แต่ใช้การตุน Candidate แทน)
 
-    logging.info("--- Initializing V19: Iterative Curation Loop (Gemini Expansion & Batch Lyrics) ---")
+    logging.info("--- Initializing V21: Cooperative Discovery & Robust Analysis ---")
 
     # ==========================================
-    # [NUCLEAR FIX] COLD START DETECTION V2.0
+    # 1. COLD START & PREPARATION (V19 Logic)
     # ==========================================
-    
-    logging.info("🔍 Starting Cold Start Detection...")
-    
-    # Step 1: Gather seed tracks
     try:
         user_seed_tracks = await get_seed_tracks(sp_client)
     except Exception as e:
         logging.error(f"❌ Failed to get seed tracks: {e}")
         user_seed_tracks = []
     
-    # Step 2: Count the tracks explicitly
-    seed_count = 0
-    if user_seed_tracks is not None:
-        seed_count = len(user_seed_tracks)
-    
-    logging.info(f"📊 Seed Track Count: {seed_count}")
-    
-    # Step 3: Explicit boolean check
-    is_cold_start = False
-    
-    if seed_count == 0:
-        is_cold_start = True
-        logging.warning("⚠️ COLD START TYPE A: Zero seed tracks found")
-    elif seed_count < 3:
-        is_cold_start = True
-        logging.warning(f"⚠️ COLD START TYPE B: Insufficient data ({seed_count} tracks < 3 minimum)")
-    else:
-        logging.info(f"✅ Sufficient data found: {seed_count} seed tracks")
-    
-    # Step 4: Execute fallback if cold start detected
-    if is_cold_start is True:
-        logging.warning("🚨 ACTIVATING FALLBACK SYSTEM...")
-        
-        try:
-            fallback_tracks = await get_fallback_recommendations(sp_client)
-            
-            # Verify fallback actually returned data
-            if fallback_tracks and len(fallback_tracks) > 0:
-                logging.info(f"✅ Fallback successful: {len(fallback_tracks)} tracks returned")
-                return fallback_tracks
-            else:
-                logging.error("❌ Fallback returned empty list")
-                return []
-                
-        except Exception as e:
-            logging.error(f"❌ Fallback system crashed: {e}")
-            return []
-    
-    # ==========================================
-    # [END NUCLEAR FIX]
-    # ==========================================
-    
+    if not user_seed_tracks or len(user_seed_tracks) < 3:
+        logging.warning("🚨 COLD START DETECTED: Activating Fallback...")
+        return await get_fallback_recommendations(sp_client)
+
     guardrail_language, dominant_language_for_prompting = await _determine_language_guardrail(sp_client, user_seed_tracks)
     
     history_uris = await get_recommendation_history(user_id)
@@ -400,356 +407,304 @@ async def get_intelligent_recommendations(
     disliked_uris = feedback_data.get('dislikes', set())
     
     master_blacklist = existing_uris.union(history_uris).union(disliked_uris)
-    logging.info(f"Master blacklist initialized with {len(master_blacklist)} URIs (Existing + History + Dislikes).")
+    logging.info(f"Master blacklist initialized with {len(master_blacklist)} URIs.")
 
-
-    # (Part 2: Candidate Generation)
-    # --- [FIX V19: แทนที่ V16 Search Logic ด้วย Gemini Expansion] ---
+    # =========================================================
+    # (Part 2: Candidate Generation - Last.fm & DB)
+    # =========================================================
     candidate_tracks_info = []
-            
-    logging.info(f"--- 🧬 Calling Gemini Seed Expansion ---")
+
+    # --- Strategy A: Internal DB (5 Songs) ---
+    target_fingerprint = emotional_profile if any(v > 0.1 for v in emotional_profile.values()) else stylistic_profile
+    internal_tracks = await find_best_matches_from_db(sp_client, target_fingerprint, master_blacklist, limit=5)
     
-    # เราใช้ user_seed_tracks (ซึ่งรวม Top+Recent+Liked) เพื่อให้ Gemini มี context ที่ดีที่สุด
-    gemini_candidates = await get_seed_expansion_groq(user_seed_tracks, user_message)
-
-    if not gemini_candidates:
-        logging.error("Gemini Seed Expansion found 0 candidates. Using fallback.")
-        return await get_fallback_recommendations(sp_client)
-
-    # แปลงผลลัพธ์จาก Gemini ให้อยู่ใน format ที่ V17/V18 คาดหวัง
-    for track in gemini_candidates:
+    for track in internal_tracks:
         candidate_tracks_info.append({
-            "artist": track.get('artist'),
-            "title": track.get('title'),
-            "spotify_track_object": None  # <-- ตั้งเป็น None เพื่อให้ logic ด้านล่างไป search หา
+            "artist": track['artists'][0]['name'],
+            "title": track['name'],
+            "spotify_track_object": track
         })
-    # --- [END FIX V19] ---
+        master_blacklist.add(track['uri'])
     
-    logging.info(f"--- 🧬 Candidate Tracks (Total: {len(candidate_tracks_info)}) ---")
+    logging.info(f"--- 🏠 Internal DB contributed {len(internal_tracks)} tracks. ---")
+
+    # --- Strategy B: Last.fm Cooperative (The Rest) ---
+    logging.info(f"--- 🤝 Starting Cooperative Discovery ---")
     
+    # 1. Prepare Seeds
+    artist_groups = defaultdict(list)
+    for track in user_seed_tracks:
+        if track.get('artists'):
+            name = track['artists'][0]['name']
+            artist_groups[name].append(track)
+
+    selected_seeds = []
+    MAX_PER_ARTIST = 3 
+    for artist, tracks in artist_groups.items():
+        if len(tracks) <= MAX_PER_ARTIST:
+            selected_seeds.extend(tracks)
+        else:
+            selected_seeds.extend(random.sample(tracks, MAX_PER_ARTIST))
     
-    # --- ( Part 3: Parallel Lyric Analysis ) ---
+    if len(selected_seeds) > 15: selected_seeds = random.sample(selected_seeds, 15)
+
+    # 2. Worker Function
+    async def fetch_cooperative_candidates(seed_track):
+        artist = seed_track['artists'][0]['name']
+        title = seed_track['name']
+        
+        # Scope (Neighbors)
+        neighbors = await get_similar_artists_lastfm(artist, limit=10)
+        allowed_artists = set([n.lower() for n in neighbors])
+        allowed_artists.add(artist.lower()) 
+
+        # Scan (Similar Tracks) - ขอเยอะหน่อยเผื่อกรองทิ้ง
+        raw_similar_tracks = await get_similar_tracks_lastfm(artist, title, limit=50)
+        
+        # Filter (Intersection)
+        filtered = []
+        for t in raw_similar_tracks:
+            if t['artist'].lower() in allowed_artists:
+                filtered.append(t)
+        
+        # Fallback
+        if not filtered and neighbors:
+            top_neighbor = neighbors[0]
+            backup = await get_artist_top_tracks_lastfm(top_neighbor, limit=3)
+            filtered.extend(backup)
+        return filtered
+
+    # 3. Execute
+    expansion_tasks = [fetch_cooperative_candidates(seed) for seed in selected_seeds]
+    results_lists = await asyncio.gather(*expansion_tasks)
+    
+    raw_candidates = []
+    for sublist in results_lists: raw_candidates.extend(sublist)
+    
+    # 4. Deduplicate
+    seen_keys = set()
+    unique_candidates = []
+    for c in raw_candidates:
+        key = f"{c['artist']}:{c['title']}".lower()
+        if key not in seen_keys:
+            unique_candidates.append(c)
+            seen_keys.add(key)
+            
+    random.shuffle(unique_candidates)
+    
+    # 5. Select for Analysis (เพิ่มเป็น 30 เพลง เพื่อให้มี Loose Matches พอสำหรับ Filler)
+    for track in unique_candidates[:30]:
+        candidate_tracks_info.append({
+            "artist": track['artist'],
+            "title": track['title'],
+            "spotify_track_object": None 
+        })
+
+    logging.info(f"--- 🧬 Candidates for Analysis: {len(candidate_tracks_info)} ---")
+
+    # =========================================================
+    # (Part 3: Analysis Loop - V19 Logic)
+    # =========================================================
     analysis_results = {}
     tracks_failed_genius = [] 
     sem = asyncio.Semaphore(10)
 
     async def _analyze_with_genius_only(track_info, blacklist_to_use):
-        """
-        (V18 Logic - ถูกเรียกโดย V19)
-        """
         await sem.acquire()
         try:
             spotify_track = track_info.get("spotify_track_object")
             
-            # --- [FIX V19: ค้นหา Track Object ถ้ามันไม่มี (มาจาก Gemini)] ---
+            # --- Search Logic (Robust Plan A/B) ---
             if not spotify_track:
                 title = track_info.get('title', '')
                 artist = track_info.get('artist', '')
-
-                # 1. แผน A: ค้นหาแบบเจาะจง (Strict Search)
+                # Strict
                 query = f"track:{title} artist:{artist}"
                 spotify_results = await search_spotify_songs(sp_client, query, limit=1)
-                
-                # 2. แผน B: ถ้าไม่เจอ ให้ค้นหาแบบกว้าง (Loose Search)
+                # Loose
                 if not spotify_results:
-                    logging.info(f"Strict search failed for '{title}'. Trying loose search...")
-                    # เอาชื่อเพลงกับศิลปินมาต่อกันเลย ให้ Spotify ช่วยเดา
                     loose_query = f"{title} {artist}"
                     spotify_results = await search_spotify_songs(sp_client, loose_query, limit=1)
-
-                if not spotify_results: 
-                    logging.warning(f"Could not find Spotify track for: {title} by {artist} (Both Strict & Loose search failed)")
-                    return # ยอมแพ้จริงๆ
                 
+                if not spotify_results: return 
                 spotify_track = spotify_results[0]
-            # --- [END FIX V19] ---
             
-            if spotify_track['uri'] in blacklist_to_use:
-                return
+            if spotify_track['uri'] in blacklist_to_use: return
             
-            track_name, artist = spotify_track.get('name', ''), spotify_track.get('artists', [{}])[0]
-            artist_id, artist_name = artist.get('id'), artist.get('name', '')
+            # --- Prepare Data ---
+            track_name = spotify_track.get('name', '')
+            artist_obj = spotify_track.get('artists', [{}])[0]
+            artist_name = artist_obj.get('name', '')
+            artist_id = artist_obj.get('id')
             
-            # --- [FIX: THE "CV" FIX] ---
+            # --- CV Clean ---
             if '(CV:' in artist_name:
                 artist_name = artist_name.split('(CV:')[0].strip()
-            # --- [END CV FIX] ---
             
-            # --- [BOOSTER LOGIC - PART 1A] ---
+            # --- Genre Lang Detect (V19 Feature) ---
             artist_genre_lang = None
             if artist_id:
                 try:
+                    # ใช้ sp_client.artist ตรวจสอบ Genre
                     artist_details = await asyncio.to_thread(sp_client.artist, artist_id=artist_id)
                     if artist_details: 
                         artist_genre_lang = _classify_lang_from_genres(artist_details.get('genres', []))
-                except Exception: 
-                    pass 
+                except: pass 
 
             song_lang = artist_genre_lang
             if song_lang is None:
                 song_lang = _detect_language_from_string(track_name, artist_name)
             
             if guardrail_language and song_lang != guardrail_language:
-                logging.info(f"GUARDRAIL (Info): '{track_name}' (Lang: {song_lang}) mismatches profile. Will analyze anyway.")
-            
-            lang = song_lang
-            # --- [END PART 1A] ---
-            
+                logging.info(f"GUARDRAIL: Skipping '{track_name}' (Lang mismatch)")
+                # return # (เปิดได้ถ้าต้องการ)
+
+            # --- Analyze ---
             moods_tuple = await analyze_and_cache_song_moods(
                 spotify_track, 
-                lang_hint=lang, 
-                use_gemini=False,
+                lang_hint=song_lang, 
+                use_gemini=False, 
                 _cleaned_artist_name=artist_name 
             )
             moods = moods_tuple[0] 
 
             if moods:
-                # --- [BOOSTER LOGIC - PART 1B] ---
                 analysis_results[spotify_track['uri']] = {
                     "track_object": spotify_track, 
                     "moods": moods,
                     "detected_lang": song_lang
                 }
-                # --- [END PART 1B] ---
                 master_blacklist.add(spotify_track['uri']) 
             else:
                 tracks_failed_genius.append(spotify_track) 
 
         except Exception as e:
-            logging.error(f"Error in _analyze_with_genius_only '{track_info.get('title')}': {e}", exc_info=False)
+            logging.error(f"Error analyzing track: {e}")
         finally:
             sem.release()
 
-    # (V17) Step 1: รัน Genius Plan A
-    analysis_tasks_genius = [_analyze_with_genius_only(info, master_blacklist) for info in candidate_tracks_info]
-    await asyncio.gather(*analysis_tasks_genius)
+    # Run Main Analysis
+    analysis_tasks = [_analyze_with_genius_only(info, master_blacklist) for info in candidate_tracks_info]
+    await asyncio.gather(*analysis_tasks)
     
-    logging.info(f"Genius (Plan A) complete. Found {len(analysis_results)} lyrics. Failed: {len(tracks_failed_genius)}")
-
-    # (V17) Step 2: รัน Gemini Plan B (Batch Request)
+    # Run Rescue (Plan B)
     if tracks_failed_genius:
-        logging.info(f"Calling Gemini (Plan B) in one batch for {len(tracks_failed_genius)} tracks...")
+        logging.info(f"Calling Gemini/Groq (Plan B) for {len(tracks_failed_genius)} tracks...")
         try:
+            from groq_ai import rescue_lyrics_with_groq 
             rescued_lyrics_map = await rescue_lyrics_with_groq(tracks_failed_genius)
-            
             for spotify_track in tracks_failed_genius:
-                artist_name = spotify_track.get('artists', [{}])[0].get('name', 'N/A')
-                track_name = spotify_track.get('name', 'N/A')
-                track_key = f"{artist_name} - {track_name}"
-                lyrics = rescued_lyrics_map.get(track_key)
+                # Key matching logic
+                a_name = spotify_track['artists'][0]['name']
+                t_name = spotify_track['name']
+                key = f"{a_name} - {t_name}"
+                lyrics = rescued_lyrics_map.get(key)
                 
                 if lyrics:
-                    logging.info(f"Gemini (Plan B) rescued lyrics for '{track_name}'")
                     moods = await asyncio.to_thread(predict_moods, lyrics)
-                else:
-                    logging.warning(f"Failed to find lyrics for '{track_name}' (Genius & Gemini). Scoring as 'neutral'.")
-                    moods = {'neutral': 1.0}
-                
-                analysis_results[spotify_track['uri']] = {"track_object": spotify_track, "moods": moods}
-                master_blacklist.add(spotify_track['uri']) 
-
+                    analysis_results[spotify_track['uri']] = {
+                        "track_object": spotify_track, 
+                        "moods": moods,
+                        "detected_lang": "unknown"
+                    }
         except Exception as e:
-            logging.error(f"Gemini (Plan B) batch request failed: {e}", exc_info=True)
+            logging.error(f"Plan B failed: {e}")
 
-    logging.info(f"Completed initial analysis. Found lyrics/data for {len(analysis_results)} tracks.")
-    # --- [ จบ Part 3 ] ---
-
-    
-    # (Part 4: Scoring Helpers)
+    # =========================================================
+    # (Part 4: Scoring Prep - V19)
+    # =========================================================
     disliked_fingerprints = []
     for uri in disliked_uris:
-        track_info = await get_spotify_track_data(sp_client, uri)
-        if track_info:
-            song_fingerprint, success = await analyze_and_cache_song_moods(track_info, lang_hint=None) 
-            if success and song_fingerprint:
-                disliked_fingerprints.append(song_fingerprint)
+        info = await get_spotify_track_data(sp_client, uri)
+        if info:
+            fp, ok = await analyze_and_cache_song_moods(info, lang_hint=None) 
+            if ok and fp: disliked_fingerprints.append(fp)
                 
     total_years, track_count = 0, 0
-    for track in user_seed_tracks:
+    for t in user_seed_tracks:
         try:
-            if track and track.get('album') and track['album'].get('release_date'):
-                total_years += int(track['album']['release_date'][:4])
+            if t['album']['release_date']:
+                total_years += int(t['album']['release_date'][:4])
                 track_count += 1
-        except (ValueError, KeyError, IndexError, TypeError): continue
+        except: continue
     average_year = total_years / track_count if track_count > 0 else None
 
-    # --- [FIX 2: BOOSTER LOGIC - APPLY SCORE] ---
-    # (Part 5: Two-Vector Scoring)
-    logging.info("--- 📈 Scoring All Analyzed Candidates (V5 Two-Vector) ---")
+    # =========================================================
+    # (Part 5: Full Scoring V19)
+    # =========================================================
+    logging.info("--- 📈 Scoring Candidates ---")
     all_scored_candidates = []
-    if not analysis_results:
-        logging.warning("No candidates left after analysis. Returning fallback.")
-        return await get_fallback_recommendations(sp_client)
-    
     has_target_emotion = any(v > 0.1 for v in emotional_profile.values())
-    if not has_target_emotion:
-        logging.info("No specific emotion detected in request. Using Stylistic Profile only.")
 
-    for uri, result in analysis_results.items():
-        spotify_track = result["track_object"]
-        song_fingerprint = result["moods"]
-        song_lang = result.get("detected_lang")
+    for uri, data in analysis_results.items():
+        track = data["track_object"]
+        fp = data["moods"]
+        lang = data.get("detected_lang")
 
-        stylistic_score = calculate_cosine_similarity(stylistic_profile, song_fingerprint)
+        # Scores
+        style_score = calculate_cosine_similarity(stylistic_profile, fp)
+        mood_score = calculate_cosine_similarity(emotional_profile, fp) if has_target_emotion else style_score
+        base_score = (mood_score * 0.7) + (style_score * 0.3) if has_target_emotion else style_score
         
-        if has_target_emotion:
-            emotional_score = calculate_cosine_similarity(emotional_profile, song_fingerprint)
-            combined_mood_score = (emotional_score * 0.7) + (stylistic_score * 0.3)
-        else:
-            combined_mood_score = stylistic_score
+        # Penalty
+        penalty = 0.0
+        for dfp in disliked_fingerprints:
+            sim = calculate_cosine_similarity(fp, dfp)
+            if sim > penalty: penalty = sim
         
-        dislike_penalty = 0.0
-        for disliked_fp in disliked_fingerprints:
-            penalty_similarity = calculate_cosine_similarity(song_fingerprint, disliked_fp)
-            if penalty_similarity > dislike_penalty:
-                dislike_penalty = penalty_similarity
-        
-        year_bonus = 0.0
+        # Bonuses
+        y_bonus = 0.0
         if average_year:
             try:
-                candidate_year = int(spotify_track['album']['release_date'][:4])
-                year_difference = abs(candidate_year - average_year)
-                if year_difference < 10:
-                    year_bonus = 0.15 * (1 - (year_difference / 10))
-            except (ValueError, KeyError, IndexError, TypeError):
-                year_bonus = 0.0
+                c_year = int(track['album']['release_date'][:4])
+                diff = abs(c_year - average_year)
+                if diff < 10: y_bonus = 0.15 * (1 - (diff / 10))
+            except: pass
         
-        language_bonus = 0.0
-        if guardrail_language:
-            if song_lang == guardrail_language:
-                language_bonus = 0.15 
-            elif song_lang == 'latin':
-                language_bonus = 0.0
+        l_bonus = 0.0
+        if guardrail_language and lang == guardrail_language:
+            l_bonus = 0.15 
         
-        final_score = (combined_mood_score * 0.7) + language_bonus + (year_bonus * 0.8) - (dislike_penalty * 0.6)
+        # Final Formula
+        final_score = (base_score * 0.7) + l_bonus + (y_bonus * 0.8) - (penalty * 0.6)
         
-        spotify_track['ai_analysis'] = {"mood_score": float(final_score), "lang_bonus": language_bonus}
-        all_scored_candidates.append(spotify_track)
-    # --- [END FIX 2] ---
-    
+        track['ai_analysis'] = {"mood_score": float(final_score)}
+        all_scored_candidates.append(track)
+
     all_scored_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
+
+    # =========================================================
+    # (Part 6: Selection & Internal Filler)
+    # =========================================================
+    # 1. Strict Filter
+    final_playlist = [t for t in all_scored_candidates if t['ai_analysis']['mood_score'] >= STRICT_SCORE_THRESHOLD]
     
-    # (Part 6: Iterative Filler Loop)
-    logging.info(f"--- Starting Round 1: Strict Filtering (Threshold: {STRICT_SCORE_THRESHOLD}) ---")
-    final_playlist = [
-        track for track in all_scored_candidates 
-        if track['ai_analysis']['mood_score'] >= STRICT_SCORE_THRESHOLD
-    ]
-    logging.info(f"Round 1 completed. {len(final_playlist)} songs passed strict filtering.")
-    
-    current_iteration = 0
-    while len(final_playlist) < MINIMUM_PLAYLIST_SIZE and current_iteration < MAX_FILLER_ITERATIONS:
-        current_iteration += 1
+    # 2. Filler (Loose Match) - ถ้าไม่พอ หยิบพวกคะแนนรองลงมา (V21 Approach)
+    if len(final_playlist) < MINIMUM_PLAYLIST_SIZE:
+        logging.info("Strict matches insufficient. Adding loose matches (Internal Filler)...")
         needed = MINIMUM_PLAYLIST_SIZE - len(final_playlist)
-        logging.warning(f"Playlist too short. Starting Filler Iteration {current_iteration}/{MAX_FILLER_ITERATIONS}. Need {needed} more.")
+        loose = [t for t in all_scored_candidates if LOOSE_SCORE_THRESHOLD <= t['ai_analysis']['mood_score'] < STRICT_SCORE_THRESHOLD]
+        final_playlist.extend(loose[:needed])
 
-        seed_source_list = await get_user_top_tracks(sp_client, limit=10)
-        num_seeds_to_pick = min(len(seed_source_list), 5)
-        seed_tracks_for_filler = random.sample(seed_source_list, num_seeds_to_pick)
-        logging.info(f"Using RANDOMIZED Top-Tracks seeds for filler: {[t['name'] for t in seed_tracks_for_filler]}")
-
-        filler_candidates_info = []
-        try:
-            # --- [FIX V19: ใช้ Gemini Filler แทนการ search] ---
-            logging.info(f"Filler Iteration {current_iteration}: Calling Gemini Filler...")
-            # ใช้ dominant_language_for_prompting เพื่อบอก AI ว่าจะเอาเพลงภาษาอะไร
-            lang_code_for_prompt = dominant_language_for_prompting if dominant_language_for_prompting else 'latin'
-            
-            filler_gemini_results = await get_filler_tracks_groq(
-                seed_tracks_for_filler,
-                lang_code_for_prompt
-            )
-
-            if filler_gemini_results:
-                for track in filler_gemini_results:
-                    filler_candidates_info.append({
-                        "artist": track.get('artist'),
-                        "title": track.get('track'), # Key ใน filler คือ 'track'
-                        "spotify_track_object": None 
-                    })
-            # --- [END FIX V19] ---
-            
-        except Exception as e: 
-            logging.error(f"Filler Iteration {current_iteration}: Gemini Filler strategy failed: {e}")
-
-        if not filler_candidates_info:
-            logging.error(f"Filler Iteration {current_iteration}: No new candidates found. Stopping loop.")
-            break 
-
-        # (Filler Loop)
-        analysis_results.clear()
-        tracks_failed_genius_filler = []
-        
-        filler_genius_tasks = [_analyze_with_genius_only(info, master_blacklist) for info in filler_candidates_info]
-        await asyncio.gather(*filler_genius_tasks)
-
-        logging.info(f"Filler Iteration {current_iteration} (Plan A): Found {len(analysis_results)} lyrics. Failed: {len(tracks_failed_genius_filler)}")
-        
-        if tracks_failed_genius_filler:
-            logging.info(f"Calling Gemini (Plan B) in one batch for {len(tracks_failed_genius_filler)} filler tracks...")
-            try:
-                rescued_lyrics_map_filler = await rescue_lyrics_with_groq(tracks_failed_genius_filler)
-                
-                for spotify_track in tracks_failed_genius_filler:
-                    artist_name = spotify_track.get('artists', [{}])[0].get('name', 'N/A')
-                    track_name = spotify_track.get('name', 'N/A')
-                    track_key = f"{artist_name} - {track_name}"
-                    lyrics = rescued_lyrics_map_filler.get(track_key)
-                    moods = await asyncio.to_thread(predict_moods, lyrics) if lyrics else {'neutral': 1.0}
-                    
-                    analysis_results[spotify_track['uri']] = {"track_object": spotify_track, "moods": moods}
-                    master_blacklist.add(spotify_track['uri'])
-            except Exception as e:
-                logging.error(f"Gemini (Plan B) filler batch failed: {e}", exc_info=True)
-
-        new_filler_songs = []
-        for uri, result in analysis_results.items():
-            spotify_track = result["track_object"]
-            song_fingerprint = result["moods"]
-
-            stylistic_score = calculate_cosine_similarity(stylistic_profile, song_fingerprint)
-            if has_target_emotion:
-                emotional_score = calculate_cosine_similarity(emotional_profile, song_fingerprint)
-                final_score = (emotional_score * 0.7) + (stylistic_score * 0.3)
-            else:
-                final_score = stylistic_score
-            
-            spotify_track['ai_analysis'] = {"mood_score": float(final_score)}
-
-            if final_score >= LOOSE_SCORE_THRESHOLD:
-                new_filler_songs.append(spotify_track)
-
-        if not new_filler_songs:
-            logging.warning(f"Filler Iteration {current_iteration}: No new songs passed loose filter. Stopping.")
-            break 
-
-        new_filler_songs.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
-        final_playlist.extend(new_filler_songs)
-        logging.info(f"Filler Iteration {current_iteration}: Added {len(new_filler_songs)}. Total now: {len(final_playlist)}")
+    # Finalize
+    final_playlist = final_playlist[:15]
     
-    # (Part 7: Finalizing)
+    # Fallback if still empty
     if not final_playlist:
-        logging.error("All recommendation iterations failed. Returning final fallback.")
         return await get_fallback_recommendations(sp_client)
 
-    final_playlist.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
-    final_playlist = final_playlist[:15] 
+    # Preload & Save History
+    try: await preload_groq_details(sp_client, final_playlist)
+    except: pass
     
-    if final_playlist:
-        await save_recommendation_history(user_id, [t['uri'] for t in final_playlist])
-    
-    logging.info(f"--- ✅ Final Curated Playlist ({len(final_playlist)} Songs) ---")
-    for i, track in enumerate(final_playlist[:10]):
-        logging.info(f"  {i+1}. (Score: {track['ai_analysis']['mood_score']:.4f}) '{track['name']}' by {track['artists'][0]['name']}")
+    await save_recommendation_history(user_id, [t['uri'] for t in final_playlist])
 
-# 🔥 NEW: auto preload song details
-    await preload_groq_details(sp_client, final_playlist)
-
+    logging.info(f"✅ Final Result: {len(final_playlist)} tracks ready.")
     return final_playlist
 
 # (*** แก้ไข ***) เพิ่ม Log ในฟังก์ชันนี้
 # ================================================
-# ✅ PATCH: Auto-Fallback Cold Start (V3 - Kantapong Fix)
+# ✅ PATCH: Auto-Fallback Cold Start
 # ================================================
 import logging
 import asyncio
