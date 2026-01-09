@@ -11,7 +11,6 @@ import random
 from spotify_api import create_spotify_client, get_fallback_recommendations
 from collections import defaultdict
 from lastfm_api import get_similar_tracks_lastfm, get_similar_artists_lastfm, get_artist_top_tracks_lastfm
-from gemini_ai import rescue_lyrics_with_gemini, get_filler_tracks_with_lyrics
 # Import local modules
 from spotify_api import (
     get_user_profile, get_user_top_tracks, get_user_recently_played_tracks, 
@@ -359,12 +358,7 @@ def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
     if norm1 == 0 or norm2 == 0: return 0.0
     return dot_product / (norm1 * norm2)
 
-# --- (*** นี่คือฟังก์ชันที่อัปเกรดตาม Workflow ของคุณ ***) ---
-# --- (*** นี่คือฟังก์ชันฉบับเต็มที่คุณขอ ***) ---
-# --- (*** นี่คือฟังก์ชันที่อัปเกรดตาม Workflow ของคุณ ***) ---
-# --- (*** นี่คือฟังก์ชันฉบับเต็มที่คุณขอ ***) ---
 # (นี่คือโค้ดเต็มของ get_intelligent_recommendations ใน recommender.py)
-# (*** V19: แก้ไข Bug การสร้าง Candidate - ใช้ Gemini Expansion ***)
 async def get_intelligent_recommendations(
     sp_client: spotipy.Spotify, 
     user_id: str, 
