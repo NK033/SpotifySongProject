@@ -1,4 +1,4 @@
-# groq_ai.py (Final Fixed: Solved Error 400 Conflict)
+# groq_ai.py (Final Version: Smart Model + Sanitation Fix)
 import logging
 import json
 import asyncio
@@ -6,8 +6,8 @@ import re
 import spotipy
 from groq import AsyncGroq
 from fastapi import HTTPException, status
-from typing import Any, Optional
-from duckduckgo_search import DDGS # 🔥 Required: pip install duckduckgo-search
+from typing import Any, Optional, List, Dict
+from duckduckgo_search import DDGS 
 
 # Import Local Modules
 from config import Config
@@ -21,13 +21,12 @@ if not Config.GROQ_API_KEY:
 
 groq_client = AsyncGroq(api_key=Config.GROQ_API_KEY)
 
-# SMART_MODEL: สำหรับงาน Logic, JSON, Search
+# ✅ Keep the Smart Model for Logic/Search
 SMART_MODEL = "openai/gpt-oss-120b" 
-
-# FAST_MODEL: สำหรับงานเขียน Creative, สรุปความ
+# ✅ Keep Llama 3 for Summaries (Fast & Creative)
 FAST_MODEL = "llama-3.3-70b-versatile"
 
-# 🔥 [RESTORED] GROQ_TOOLS (จำเป็นสำหรับการ Import จากไฟล์อื่น)
+# 🔥 [RESTORED] GROQ_TOOLS
 GROQ_TOOLS = [
     {
         "type": "function",
@@ -67,16 +66,14 @@ GROQ_TOOLS = [
 # --- 2. The Search Tool Function ---
 def search_web(query: str) -> str:
     """
-    Real web search using DuckDuckGo (Free, No API Key required).
+    Real web search using DuckDuckGo.
     """
     try:
         logging.info(f"🔎 Searching Web for: {query}")
-        # max_results=3 เพียงพอสำหรับเนื้อเพลง/ข้อมูลทั่วไป
         results = DDGS().text(query, max_results=3)
         if not results:
             return "No results found."
         
-        # รวมผลลัพธ์เป็น Text เดียวเพื่อให้ AI อ่าน
         summary = "\n".join([f"- {r['title']}: {r['body']}" for r in results])
         return summary
     except Exception as e:
@@ -85,7 +82,6 @@ def search_web(query: str) -> str:
 # --- 3. Robust Helpers ---
 
 def _sanitize_json_string(json_str: str) -> str:
-    """ทำความสะอาด String ให้เป็น JSON ที่ถูกต้องที่สุด"""
     try:
         json_match = re.search(r'(\{.*\}|\[.*\])', json_str, re.DOTALL)
         if json_match:
@@ -103,17 +99,17 @@ def _sanitize_json_string(json_str: str) -> str:
 
 async def _call_groq_api(
     model: str, 
-    messages: list[dict], 
+    messages: List[Dict], 
     json_mode: bool = False, 
     reasoning: bool = False,
     temperature: float = 0.7,
-    allow_search: bool = False # 🔥 New flag: อนุญาตให้ค้นหาหรือไม่?
+    allow_search: bool = False
 ) -> str:
     """
     Central API Wrapper with Tool Execution Loop support.
     """
     try:
-        # 1. Define Tools (Only if search is allowed)
+        # 1. Define Tools
         tools = [
             {
                 "type": "function",
@@ -131,26 +127,22 @@ async def _call_groq_api(
             }
         ] if allow_search else None
 
-        # Prepare base parameters
         params = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
         }
 
-        # 🔥 FIX ERROR 400: Groq ไม่อนุญาตให้ใช้ json_mode พร้อมกับ tools
-        # ถ้ามี tools เราจะปิด json_mode (แล้วใช้ Prompt บังคับเอา)
         if json_mode and not tools:
             params["response_format"] = {"type": "json_object"}
         
-        # Configure Tools
         if tools: 
             params["tools"] = tools
-            params["tool_choice"] = "auto" # Let AI decide
+            params["tool_choice"] = "auto"
         else:
-            params["tool_choice"] = "none" # Explicitly disable tools
+            params["tool_choice"] = "none"
 
-        # Reasoning Effort (Specific to gpt-oss-120b)
+        # Reasoning effort (Only for 120b)
         if reasoning and "gpt-oss-120b" in model:
             params["reasoning_effort"] = "medium"
             params["temperature"] = 1.0 
@@ -163,18 +155,25 @@ async def _call_groq_api(
         tool_calls = response_message.tool_calls
         
         if tool_calls:
-            # AI wants to use a tool -> Execute the tool loop
-            messages.append(response_message) # Append the AI's intent to history
+            # 🔥 THE FIX: "Throw the reasoning away"
+            # We convert the message to a dict and manually delete the toxic fields
+            response_dict = response_message.model_dump()
+            
+            # Delete incompatible fields
+            if "reasoning" in response_dict:
+                del response_dict["reasoning"]
+            if "annotations" in response_dict:
+                del response_dict["annotations"]
+                
+            messages.append(response_dict) 
             
             for tool_call in tool_calls:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
                 
                 if function_name == "search_web":
-                    # Execute search (run in thread to avoid blocking async loop)
                     tool_output = await asyncio.to_thread(search_web, **function_args)
                     
-                    # Append result to messages
                     messages.append({
                         "tool_call_id": tool_call.id,
                         "role": "tool",
@@ -183,30 +182,36 @@ async def _call_groq_api(
                     })
             
             # --- Round 2: Final Response Generation ---
-            # Send the search results back to AI for the final answer
-            # Force tool_choice="none" to prevent infinite loops
-            params["messages"] = messages
-            params["tool_choice"] = "none" 
+            # Now we can safely call Llama 3 because the history is clean
+            final_model = "llama-3.3-70b-versatile"
             
-            # Note: แม้รอบนี้เราจะปิด Tool แต่เราจะไม่เปิด JSON mode กลับมา
-            # เพื่อความปลอดภัยและหลีกเลี่ยง Error เดิมซ้ำ
+            params_round_2 = {
+                "model": final_model,
+                "messages": messages,
+                "temperature": 0.6, 
+            }
+
+            if json_mode:
+                params_round_2["response_format"] = {"type": "json_object"}
+
+            messages.append({
+                "role": "system",
+                "content": "Search is complete. Use the provided results to answer the user request immediately. Do not search again."
+            })
             
-            final_response = await groq_client.chat.completions.create(**params)
+            final_response = await groq_client.chat.completions.create(**params_round_2)
             return final_response.choices[0].message.content
             
         else:
-            # No tool used, return the answer directly
             return response_message.content
 
     except Exception as e:
         logging.error(f"❌ Groq API Call Failed ({model}): {e}", exc_info=True)
-        # Return empty string to prevent app crash
         return ""
 
-# --- 4. Core Functions (Updated for Search) ---
+# --- 4. Core Functions (Same Logic, Different Models) ---
 
 async def analyze_and_store_song_analysis_groq(spotify_track_data: dict) -> dict:
-    """Analyzes a song description (No search needed)."""
     artist = spotify_track_data.get('artists', [{}])[0].get('name', 'N/A')
     title = spotify_track_data.get('name', 'N/A')
     album = spotify_track_data.get('album', {}).get('name', 'N/A')
@@ -224,7 +229,7 @@ async def analyze_and_store_song_analysis_groq(spotify_track_data: dict) -> dict
     """
 
     try:
-        # Use FAST_MODEL, No Search needed
+        # Simple analysis -> Use Fast Model
         content = await _call_groq_api(FAST_MODEL, [{"role": "user", "content": prompt}], allow_search=False)
         combined_analysis = { "gemini_analysis": content } 
         await save_song_analysis_to_db(spotify_track_data, combined_analysis)
@@ -245,7 +250,6 @@ async def get_song_analysis_details_groq(sp_client: spotipy.Spotify, song_uri: s
         return {}
 
 async def summarize_playlist_groq(sp_client: spotipy.Spotify, final_song_uris: list[str], seed_tracks: list[dict]) -> str:
-    """Summarizes the playlist (No search needed)."""
     await preload_groq_details(sp_client, [{"uri": uri} for uri in final_song_uris])
     
     seed_info = "\n".join([f"- {t['name']} ({t['artists'][0]['name']})" for t in seed_tracks[:5]])
@@ -274,12 +278,12 @@ async def summarize_playlist_groq(sp_client: spotipy.Spotify, final_song_uris: l
     """
 
     try:
+        # Creative summary -> Use Fast Model
         return await _call_groq_api(FAST_MODEL, [{"role": "user", "content": prompt}], temperature=0.7, allow_search=False)
     except Exception:
         return "เพลย์ลิสต์คัดสรรพิเศษสำหรับคุณ หวังว่าจะถูกใจนะครับ!"
 
 async def get_seed_expansion_groq(top_tracks: list[dict], user_message: str) -> list[dict]:
-    """Expands seed tracks (No search needed, relies on AI knowledge)."""
     if not top_tracks: return []
     
     seed_str = json.dumps([{"artist": t['artists'][0]['name'], "title": t['name']} for t in top_tracks[:15]], ensure_ascii=False)
@@ -293,10 +297,11 @@ async def get_seed_expansion_groq(top_tracks: list[dict], user_message: str) -> 
     Constraints:
     1. Output JSON ONLY. Format: list of objects with "artist", "title", "reason".
     2. Do NOT suggest songs present in the seed list.
+    3. Reason must be in Thai or English.
     """
 
     try:
-        # allow_search=False: rely on internal knowledge base
+        # Logic heavy -> Use Smart Model (120b)
         content = await _call_groq_api(SMART_MODEL, [{"role": "user", "content": prompt}], json_mode=True, reasoning=True, allow_search=False)
         data = json.loads(_sanitize_json_string(content))
         
@@ -310,54 +315,57 @@ async def get_seed_expansion_groq(top_tracks: list[dict], user_message: str) -> 
         return []
 
 async def rescue_lyrics_with_groq(failed_tracks: list[dict]) -> dict:
-    """
-    Attempts to fetch lyrics. 
-    🔥 ENABLED SEARCH here to find accurate lyrics from the web.
-    """
     if not failed_tracks: return {}
     
-    logging.info(f"--- Groq Lyric Rescue (with Search): Processing {len(failed_tracks)} tracks ---")
-    
-    # Process one by one to ensure search accuracy and context
+    logging.info(f"--- Groq Lyric Rescue (Batch + Search): Processing {len(failed_tracks)} tracks ---")
+    BATCH_SIZE = 5 
     all_lyrics = {}
-    
-    for t in failed_tracks:
-        artist = t['artists'][0]['name']
-        title = t['name']
+
+    for i in range(0, len(failed_tracks), BATCH_SIZE):
+        batch = failed_tracks[i:i+BATCH_SIZE]
         
+        tracks_input = []
+        for idx, t in enumerate(batch):
+            key_id = f"t{idx}"
+            tracks_input.append({
+                "id": key_id,
+                "artist": t['artists'][0]['name'],
+                "title": t['name']
+            })
+
         prompt = f"""
-        Find the lyrics for: "{title}" by "{artist}".
-        Search the web if you don't know the lyrics internally.
+        Fetch lyrics for these songs: {json.dumps(tracks_input, ensure_ascii=False)}
         
-        Output JSON ONLY: {{ "lyrics": "..." }}
-        If absolutely not found even after searching, return empty string in JSON.
+        Instruction:
+        1. Search the web for each song's lyrics if you don't know them.
+        2. Return Output JSON Object: Keys are "id", Values are "lyrics_text".
+        3. Use \\n for newlines. Return empty string if absolutely not found.
         """
-        
+
         try:
-            # 🔥 Allow search is TRUE here!
+            # Search needed -> Use Smart Model (120b) with Search
             content = await _call_groq_api(
                 SMART_MODEL, 
                 [{"role": "user", "content": prompt}], 
                 json_mode=True, 
+                reasoning=True, 
                 allow_search=True 
             )
             
             data = json.loads(_sanitize_json_string(content))
-            lyrics = data.get("lyrics", "")
             
-            if lyrics and len(lyrics) > 50:
-                key = f"{artist} - {title}"
-                all_lyrics[key] = lyrics
-                logging.info(f"✅ Found lyrics for {title} via Web Search")
-            
+            for idx, t in enumerate(batch):
+                key_id = f"t{idx}"
+                if data.get(key_id):
+                    real_key = f"{t['artists'][0]['name']} - {t['name']}"
+                    all_lyrics[real_key] = data[key_id]
+        
         except Exception as e:
-            logging.error(f"Lyric search failed for {title}: {e}")
-            # Skip to next song
+            logging.error(f"Lyric Rescue Batch Failed: {e}")
 
     return all_lyrics
 
 async def get_filler_tracks_groq(existing_tracks: list[dict], lang_guardrail: str) -> list[dict]:
-    """Finds filler tracks (No search needed)."""
     seed_str = "\n".join([f"- {t['name']} ({t['artists'][0]['name']})" for t in existing_tracks[:10]])
     
     prompt = f"""
@@ -367,10 +375,12 @@ async def get_filler_tracks_groq(existing_tracks: list[dict], lang_guardrail: st
     Task: Suggest 15 NEW songs.
     Constraints:
     1. Language Code: '{lang_guardrail}' (Match strict).
-    2. Output JSON: {{ "filler_tracks": [ {{ "artist": "...", "track": "...", "reason": "..." }} ] }}
+    2. Vibe: Match the seed tracks.
+    3. Output JSON: {{ "filler_tracks": [ {{ "artist": "...", "track": "...", "reason": "..." }} ] }}
     """
 
     try:
+        # Logic heavy -> Use Smart Model (120b)
         content = await _call_groq_api(SMART_MODEL, [{"role": "user", "content": prompt}], json_mode=True, reasoning=True, allow_search=False)
         data = json.loads(_sanitize_json_string(content))
         return data.get("filler_tracks", [])
@@ -378,7 +388,6 @@ async def get_filler_tracks_groq(existing_tracks: list[dict], lang_guardrail: st
         return []
 
 async def get_emotional_profile_from_groq(user_message: str) -> dict:
-    """Analyzes user sentiment (No search needed)."""
     prompt = f"""
     Analyze request: "{user_message}"
     Map to emotions (0.0-1.0): [joy, sadness, anger, fear, excitement, love, optimism, neutral]
@@ -391,7 +400,6 @@ async def get_emotional_profile_from_groq(user_message: str) -> dict:
         return {}
 
 async def preload_groq_details(sp_client: spotipy.Spotify, tracks: list[dict]):
-    """Preloads song analysis (Parallel)."""
     if not tracks: return
     try:
         tasks = [get_song_analysis_details_groq(sp_client, t['uri']) for t in tracks if t.get('uri')]
@@ -400,9 +408,7 @@ async def preload_groq_details(sp_client: spotipy.Spotify, tracks: list[dict]):
         logging.error(f"Preload failed: {e}")
 
 async def translate_lyrics_to_english_groq(lyrics: str, artist: str, track: str) -> str:
-    """Universal Translator (No search needed)."""
     short_lyrics = lyrics[:1000]
-
     prompt = f"""
     Act as a professional translator for music lyrics.
     Target: Translate the following lyrics into English.
@@ -414,7 +420,6 @@ async def translate_lyrics_to_english_groq(lyrics: str, artist: str, track: str)
     1. Translate to English if not already.
     2. OUTPUT ONLY THE ENGLISH LYRICS.
     """
-
     try:
         translated_text = await _call_groq_api(
             FAST_MODEL, 
