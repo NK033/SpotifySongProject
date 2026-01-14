@@ -5,14 +5,35 @@ import json
 import logging
 from config import Config
 
+# 1. Create a Global Pool Variable
+db_pool = None
+
 def get_db_connection():
-    conn = mysql.connector.connect(
-        host=Config.DB_HOST,
-        user=Config.DB_USER,
-        password=Config.DB_PASSWORD,
-        database=Config.DB_NAME
-    )
-    return conn
+    global db_pool
+    
+    # 2. Initialize the pool only once
+    if db_pool is None:
+        try:
+            db_pool = mysql.connector.pooling.MySQLConnectionPool(
+                pool_name="spotify_pool",
+                pool_size=10,  # Keep 10 connections ready
+                pool_reset_session=True,
+                host=Config.DB_HOST,
+                user=Config.DB_USER,
+                password=Config.DB_PASSWORD,
+                database=Config.DB_NAME
+            )
+            print("✅ Database Connection Pool Created")
+        except Error as e:
+            print(f"❌ Error creating pool: {e}")
+            raise e
+
+    # 3. Get a connection from the pool
+    try:
+        return db_pool.get_connection()
+    except Exception as e:
+        print(f"❌ Failed to get connection from pool: {e}")
+        raise e
 
 # Helper for dictionary cursor
 def get_cursor(conn):

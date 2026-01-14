@@ -541,7 +541,8 @@ async def get_live_status(sp_client: spotipy.Spotify = Depends(get_spotify_clien
         
         if lyrics:
             # ใช้ Model ของคุณวิเคราะห์ (ไม่เสีย Token)
-            emotional_fingerprint = custom_model.predict_moods(lyrics)
+            # NEW (Good): Non-blocking
+            emotional_fingerprint = await asyncio.to_thread(custom_model.predict_moods, lyrics)
             
             # บันทึกผลลง Database
             analysis_data = {
