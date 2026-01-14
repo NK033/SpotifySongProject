@@ -1,217 +1,241 @@
 # database.py
-import sqlite3
+import mysql.connector
 import asyncio
-import os
 import json
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_FILE = os.path.join(APP_DIR, "song_analyses.db")
+import logging
+from config import Config
 
 def get_db_connection():
-    """
-    สร้างและคืนค่าการเชื่อมต่อฐานข้อมูล SQLite
-    """
-    # This now connects to the absolute path
-    conn = sqlite3.connect(DATABASE_FILE)
-    conn.row_factory = sqlite3.Row
+    conn = mysql.connector.connect(
+        host=Config.DB_HOST,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
+        database=Config.DB_NAME
+    )
     return conn
 
+# Helper for dictionary cursor
+def get_cursor(conn):
+    return conn.cursor(dictionary=True)
+
 async def init_db():
-    """
-    เริ่มต้นฐานข้อมูล: สร้างตารางที่จำเป็นทั้งหมดหากยังไม่มี
-    """
     def setup_tables():
-        # การทำงานทั้งหมด (เปิด, สั่งงาน, ปิด) เกิดขึ้นในฟังก์ชันนี้
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            # 1. ตารางสำหรับเก็บผลวิเคราะห์เพลง (Song Analyses)
+            
+            # 1. Song Analyses (Updated with score & lyrics)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS song_analyses (
-                    spotify_uri TEXT PRIMARY KEY,
-                    title TEXT,
-                    artist TEXT,
-                    album TEXT,
-                    analysis_json TEXT,
+                    spotify_uri VARCHAR(255) PRIMARY KEY,
+                    title VARCHAR(255),
+                    artist VARCHAR(255),
+                    album VARCHAR(255),
+                    image_url VARCHAR(500),      -- For Images
+                    lyrics LONGTEXT,             -- Cached Lyrics
+                    language VARCHAR(10),        -- Language Code
+                    mood_scores JSON,            -- ✅ THE CUSTOM MODEL SCORE
+                    analysis_json LONGTEXT,      -- Groq Description
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
-            # 2. ตารางสำหรับ Cache แผนของ AI (AI Plans)
+            
+            # 2. AI Plans
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS ai_plans (
-                    genre TEXT PRIMARY KEY,
-                    artists_json TEXT,
+                    genre VARCHAR(255) PRIMARY KEY,
+                    artists_json LONGTEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
-            # 3. ตารางสำหรับเก็บแนวเพลง (Self-Learning)
+
+            # 3. Genres
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS genres (
-                    name TEXT PRIMARY KEY
-                )
+                    name VARCHAR(255) PRIMARY KEY
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
-            # 4. ตารางสำหรับเก็บศิลปินและเชื่อมกับแนวเพลง (Self-Learning)
+
+            # 4. Artists
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS artists (
-                    name TEXT PRIMARY KEY,
-                    genre TEXT,
-                    FOREIGN KEY (genre) REFERENCES genres (name)
-                )
+                    name VARCHAR(255) PRIMARY KEY,
+                    genre VARCHAR(255),
+                    FOREIGN KEY (genre) REFERENCES genres (name) ON DELETE CASCADE
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
-            # 5. ตารางสำหรับเก็บชื่อพ้องของแนวเพลง
+
+            # 5. Genre Aliases
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS genre_aliases (
-                    alias TEXT PRIMARY KEY,
-                    canonical_name TEXT,
-                    FOREIGN KEY (canonical_name) REFERENCES genres (name)
-                )
+                    alias VARCHAR(255) PRIMARY KEY,
+                    canonical_name VARCHAR(255),
+                    FOREIGN KEY (canonical_name) REFERENCES genres (name) ON DELETE CASCADE
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
-            # 6. ตารางสำหรับเก็บโปรไฟล์อารมณ์ของผู้ใช้
+
+            # 6. User Mood Profiles
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_mood_profiles (
-                    user_id TEXT PRIMARY KEY,
-                    profile_json TEXT,
+                    user_id VARCHAR(255) PRIMARY KEY,
+                    profile_json LONGTEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
-            # 7. (ใหม่) ตารางสำหรับเก็บประวัติเพลงที่เคยแนะนำ
+
+            # 7. Recommendation History
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS recommendation_history (
-                    user_id TEXT NOT NULL,
-                    track_uri TEXT NOT NULL,
+                    user_id VARCHAR(255) NOT NULL,
+                    track_uri VARCHAR(255) NOT NULL,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, track_uri)
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
-             # 8. (ใหม่) ตารางสำหรับเก็บ Feedback ของผู้ใช้
+
+            # 8. User Feedback
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_feedback (
-                    user_id TEXT NOT NULL,
-                    track_uri TEXT NOT NULL,
-                    feedback TEXT NOT NULL, -- 'like' or 'dislike'
+                    user_id VARCHAR(255) NOT NULL,
+                    track_uri VARCHAR(255) NOT NULL,
+                    feedback VARCHAR(50) NOT NULL, 
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, track_uri)
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
-            # --- 9. (ใหม่) ตารางสำหรับเก็บเพลย์ลิสต์ที่ Pin ไว้ ---
+            # 9. Pinned Playlists
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pinned_playlists (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT NOT NULL,
-                    playlist_name TEXT NOT NULL,
-                    songs_json TEXT NOT NULL,
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id VARCHAR(255) NOT NULL,
+                    playlist_name VARCHAR(255) NOT NULL,
+                    songs_json LONGTEXT NOT NULL,
                     recommendation_text TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)               
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            """)
+
             conn.commit()
+            print(f"✅ MySQL Database '{Config.DB_NAME}' initialized.")
+        except mysql.connector.Error as err:
+            print(f"❌ DB Init Error: {err}")
         finally:
             conn.close()
-            
     await asyncio.to_thread(setup_tables)
-    print(f"ฐานข้อมูล SQLite '{DATABASE_FILE}' พร้อมสำหรับระบบ Self-Learning แล้ว")
 
 async def get_song_analysis_from_db(spotify_uri: str) -> dict | None:
-    """ดึงข้อมูลการวิเคราะห์เพลงจากฐานข้อมูลด้วย spotify_uri"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            row = cursor.execute("SELECT analysis_json FROM song_analyses WHERE spotify_uri = ?", (spotify_uri,)).fetchone()
-            return json.loads(row['analysis_json']) if row else None
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT analysis_json, mood_scores, lyrics FROM song_analyses WHERE spotify_uri = %s", (spotify_uri,))
+            row = cursor.fetchone()
+            if row:
+                # Merge fields for the app
+                data = json.loads(row['analysis_json'])
+                if row['mood_scores']:
+                    data['predicted_moods'] = json.loads(row['mood_scores'])
+                if row['lyrics']:
+                    data['lyrics'] = row['lyrics']
+                return data
+            return None
         finally:
             conn.close()
-            
     return await asyncio.to_thread(db_operation)
 
 async def save_song_analysis_to_db(spotify_track_data: dict, analysis_data: dict):
-    """บันทึกข้อมูลการวิเคราะห์เพลงลงในฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
             spotify_uri = spotify_track_data.get('uri')
+            
+            # Extract specific fields
+            lyrics = analysis_data.get('lyrics', None)
+            mood_scores = json.dumps(analysis_data.get('predicted_moods', {}), ensure_ascii=False)
+            
+            # Remove them from the main analysis_json to avoid redundancy
+            clean_analysis = analysis_data.copy()
+            clean_analysis.pop('lyrics', None)
+            clean_analysis.pop('predicted_moods', None)
+            
             cursor.execute(
-                """INSERT OR REPLACE INTO song_analyses (spotify_uri, title, artist, album, analysis_json) 
-                   VALUES (?, ?, ?, ?, ?)""",
+                """REPLACE INTO song_analyses 
+                   (spotify_uri, title, artist, album, lyrics, mood_scores, analysis_json) 
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (spotify_uri, 
                  spotify_track_data.get('name'), 
                  spotify_track_data.get('artists', [{}])[0].get('name'), 
                  spotify_track_data.get('album', {}).get('name'),
-                 json.dumps(analysis_data, ensure_ascii=False))
+                 lyrics,
+                 mood_scores,
+                 json.dumps(clean_analysis, ensure_ascii=False))
             )
             conn.commit()
         finally:
             conn.close()
-
     await asyncio.to_thread(db_operation)
 
+# ... (The rest of the functions: get_cached_plan, save_user_mood_profile, etc. remain the same as previous turn) ...
 async def get_cached_plan(genre: str) -> list | None:
-    """ดึงแผนการ (รายชื่อศิลปิน) ที่เคยบันทึกไว้จากฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            row = cursor.execute("SELECT artists_json FROM ai_plans WHERE genre = ?", (genre,)).fetchone()
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT artists_json FROM ai_plans WHERE genre = %s", (genre,))
+            row = cursor.fetchone()
             return json.loads(row['artists_json']) if row else None
         finally:
             conn.close()
-            
     return await asyncio.to_thread(db_operation)
 
 async def cache_plan(genre: str, artist_list: list):
-    """บันทึกแผนการใหม่ (รายชื่อศิลปิน) ลงฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT OR REPLACE INTO ai_plans (genre, artists_json) VALUES (?, ?)",
+                "REPLACE INTO ai_plans (genre, artists_json) VALUES (%s, %s)",
                 (genre, json.dumps(artist_list, ensure_ascii=False))
             )
             conn.commit()
         finally:
             conn.close()
-            
     return await asyncio.to_thread(db_operation)
 
 async def get_artists_by_genre(genre: str) -> list[str]:
-    """ดึงรายชื่อศิลปินจากฐานข้อมูลตามแนวเพลง"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            rows = cursor.execute("SELECT name FROM artists WHERE genre = ?", (genre,)).fetchall()
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT name FROM artists WHERE genre = %s", (genre,))
+            rows = cursor.fetchall()
             return [row['name'] for row in rows]
         finally:
             conn.close()
-            
     return await asyncio.to_thread(db_operation)
 
 async def add_new_genre_and_artists(genre: str, artist_list: list[str]):
-    """บันทึกแนวเพลงและศิลปินใหม่ๆ ลงฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO genres (name) VALUES (?)", (genre,))
+            cursor.execute("INSERT IGNORE INTO genres (name) VALUES (%s)", (genre,))
             for artist in artist_list:
-                cursor.execute("INSERT OR IGNORE INTO artists (name, genre) VALUES (?, ?)", (artist, genre))
+                cursor.execute("INSERT IGNORE INTO artists (name, genre) VALUES (%s, %s)", (artist, genre))
             conn.commit()
         finally:
             conn.close()
-            
     await asyncio.to_thread(db_operation)
 
 async def save_user_mood_profile(user_id: str, profile_data: dict):
-    """บันทึกโปรไฟล์อารมณ์ของผู้ใช้ลงฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT OR REPLACE INTO user_mood_profiles (user_id, profile_json) VALUES (?, ?)",
+                "REPLACE INTO user_mood_profiles (user_id, profile_json) VALUES (%s, %s)",
                 (user_id, json.dumps(profile_data, ensure_ascii=False))
             )
             conn.commit()
@@ -220,28 +244,25 @@ async def save_user_mood_profile(user_id: str, profile_data: dict):
     await asyncio.to_thread(db_operation)
 
 async def get_user_mood_profile(user_id: str) -> dict | None:
-    """ดึงโปรไฟล์อารมณ์ของผู้ใช้จากฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            row = cursor.execute("SELECT profile_json FROM user_mood_profiles WHERE user_id = ?", (user_id,)).fetchone()
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT profile_json FROM user_mood_profiles WHERE user_id = %s", (user_id,))
+            row = cursor.fetchone()
             return json.loads(row['profile_json']) if row else None
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)
 
 async def save_recommendation_history(user_id: str, track_uris: list[str]):
-    """บันทึกประวัติเพลงที่แนะนำให้ผู้ใช้"""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            # เตรียมข้อมูลเป็น list of tuples
             data_to_insert = [(user_id, uri) for uri in track_uris]
-            # ใช้ INSERT OR IGNORE เพื่อป้องกัน error หากพยายามบันทึกเพลงซ้ำ
             cursor.executemany(
-                "INSERT OR IGNORE INTO recommendation_history (user_id, track_uri) VALUES (?, ?)",
+                "INSERT IGNORE INTO recommendation_history (user_id, track_uri) VALUES (%s, %s)",
                 data_to_insert
             )
             conn.commit()
@@ -250,28 +271,24 @@ async def save_recommendation_history(user_id: str, track_uris: list[str]):
     await asyncio.to_thread(db_operation)
 
 async def get_recommendation_history(user_id: str) -> set[str]:
-    """ดึงประวัติเพลงที่เคยแนะนำทั้งหมดของผู้ใช้ในรูปแบบ set เพื่อความรวดเร็ว"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            rows = cursor.execute("SELECT track_uri FROM recommendation_history WHERE user_id = ?", (user_id,)).fetchall()
-            # คืนค่าเป็น set ของ track_uri
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT track_uri FROM recommendation_history WHERE user_id = %s", (user_id,))
+            rows = cursor.fetchall()
             return {row['track_uri'] for row in rows}
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)
 
 async def save_user_feedback(user_id: str, track_uri: str, feedback: str):
-    """บันทึก Feedback (like/dislike) ของผู้ใช้ลงฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            # ใช้ INSERT OR REPLACE เพื่อให้ Feedback ใหม่ทับของเก่าเสมอ
-            # เช่น หากเคย dislike แล้วมากด like, สถานะจะเปลี่ยนเป็น like
             cursor.execute(
-                "INSERT OR REPLACE INTO user_feedback (user_id, track_uri, feedback) VALUES (?, ?, ?)",
+                "REPLACE INTO user_feedback (user_id, track_uri, feedback) VALUES (%s, %s, %s)",
                 (user_id, track_uri, feedback)
             )
             conn.commit()
@@ -280,12 +297,12 @@ async def save_user_feedback(user_id: str, track_uri: str, feedback: str):
     await asyncio.to_thread(db_operation)
 
 async def get_user_feedback(user_id: str) -> dict:
-    """ดึงข้อมูล Feedback ทั้งหมดของผู้ใช้ แยกเป็น 'likes' และ 'dislikes'"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            rows = cursor.execute("SELECT track_uri, feedback FROM user_feedback WHERE user_id = ?", (user_id,)).fetchall()
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT track_uri, feedback FROM user_feedback WHERE user_id = %s", (user_id,))
+            rows = cursor.fetchall()
             feedback_data = {
                 'likes': {row['track_uri'] for row in rows if row['feedback'] == 'like'},
                 'dislikes': {row['track_uri'] for row in rows if row['feedback'] == 'dislike'}
@@ -296,15 +313,14 @@ async def get_user_feedback(user_id: str) -> dict:
     return await asyncio.to_thread(db_operation)
 
 async def get_user_mood_profile_with_timestamp(user_id: str) -> dict | None:
-    """ดึงโปรไฟล์อารมณ์ของผู้ใช้จากฐานข้อมูล พร้อมกับ timestamp"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            row = cursor.execute("SELECT profile_json, timestamp FROM user_mood_profiles WHERE user_id = ?", (user_id,)).fetchone()
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT profile_json, timestamp FROM user_mood_profiles WHERE user_id = %s", (user_id,))
+            row = cursor.fetchone()
             if not row:
                 return None
-            
             return {
                 "profile": json.loads(row['profile_json']),
                 "timestamp": row['timestamp']
@@ -314,14 +330,13 @@ async def get_user_mood_profile_with_timestamp(user_id: str) -> dict | None:
     return await asyncio.to_thread(db_operation)
 
 async def add_pinned_playlist(user_id: str, playlist_name: str, songs_data: list, recommendation_text: str):
-    """บันทึกเพลย์ลิสต์ที่ผู้ใช้ Pin ไว้ลงฐานข้อมูล"""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO pinned_playlists (user_id, playlist_name, songs_json, recommendation_text)
-                   VALUES (?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s)""",
                 (user_id, playlist_name, json.dumps(songs_data, ensure_ascii=False), recommendation_text)
             )
             conn.commit()
@@ -330,16 +345,15 @@ async def add_pinned_playlist(user_id: str, playlist_name: str, songs_data: list
     await asyncio.to_thread(db_operation)
 
 async def get_pinned_playlists_by_user(user_id: str) -> list:
-    """ดึงข้อมูลเพลย์ลิสต์ที่ผู้ใช้เคย Pin ไว้ทั้งหมด"""
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            rows = cursor.execute(
-                "SELECT id, playlist_name, songs_json, recommendation_text, timestamp FROM pinned_playlists WHERE user_id = ? ORDER BY timestamp DESC",
+            cursor = get_cursor(conn)
+            cursor.execute(
+                "SELECT id, playlist_name, songs_json, recommendation_text, timestamp FROM pinned_playlists WHERE user_id = %s ORDER BY timestamp DESC",
                 (user_id,)
-            ).fetchall()
-            
+            )
+            rows = cursor.fetchall()
             playlists = []
             for row in rows:
                 playlists.append({
@@ -355,33 +369,29 @@ async def get_pinned_playlists_by_user(user_id: str) -> list:
     return await asyncio.to_thread(db_operation)
 
 async def delete_pinned_playlist(pin_id: int, user_id: str):
-    """Deletes a specific pinned playlist belonging to a user."""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            # The WHERE clause ensures a user can only delete their own playlists
             cursor.execute(
-                "DELETE FROM pinned_playlists WHERE id = ? AND user_id = ?",
+                "DELETE FROM pinned_playlists WHERE id = %s AND user_id = %s",
                 (pin_id, user_id)
             )
             conn.commit()
-            # rowcount will be 1 if a row was deleted, 0 otherwise
             return cursor.rowcount > 0
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)
 
 async def update_pinned_playlist(pin_id: int, user_id: str, new_name: str, new_songs_json: str):
-    """Updates a pinned playlist's name and song list."""
     def db_operation():
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(
                 """UPDATE pinned_playlists 
-                   SET playlist_name = ?, songs_json = ?, timestamp = CURRENT_TIMESTAMP
-                   WHERE id = ? AND user_id = ?""",
+                   SET playlist_name = %s, songs_json = %s, timestamp = CURRENT_TIMESTAMP
+                   WHERE id = %s AND user_id = %s""",
                 (new_name, new_songs_json, pin_id, user_id)
             )
             conn.commit()
@@ -391,30 +401,23 @@ async def update_pinned_playlist(pin_id: int, user_id: str, new_name: str, new_s
     return await asyncio.to_thread(db_operation)
 
 async def get_all_analyzed_tracks() -> list[dict]:
-    """
-    ดึงข้อมูลเพลงทั้งหมดที่เคยวิเคราะห์แล้ว (URI และ Moods)
-    เพื่อนำมาเป็น 'Internal Candidates' (Strategy A)
-    """
     def db_operation():
         conn = get_db_connection()
         try:
-            cursor = conn.cursor()
-            # ดึง URI และ JSON
-            rows = cursor.execute("SELECT spotify_uri, analysis_json FROM song_analyses").fetchall()
-            
+            cursor = get_cursor(conn)
+            # ✅ Updated to read from mood_scores column
+            cursor.execute("SELECT spotify_uri, mood_scores FROM song_analyses")
+            rows = cursor.fetchall()
             results = []
             for row in rows:
-                try:
-                    analysis = json.loads(row['analysis_json'])
-                    if 'predicted_moods' in analysis:
+                if row['mood_scores']:
+                    try:
                         results.append({
                             'uri': row['spotify_uri'],
-                            'moods': analysis['predicted_moods']
+                            'moods': json.loads(row['mood_scores'])
                         })
-                except:
-                    continue
+                    except: continue
             return results
         finally:
             conn.close()
-            
     return await asyncio.to_thread(db_operation)

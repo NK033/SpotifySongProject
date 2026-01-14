@@ -1,37 +1,37 @@
 # config.py
 import os
 from dotenv import load_dotenv
-from groq import AsyncGroq
 
 load_dotenv()
 
 class Config:
     """
-    Class สำหรับเก็บค่า Configuration ทั้งหมดจาก Environment Variables
+    Configuration loaded from Environment Variables
     """
-    #GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
     SPOTIPY_CLIENT_ID: str = os.getenv("SPOTIPY_CLIENT_ID")
     SPOTIPY_CLIENT_SECRET: str = os.getenv("SPOTIPY_CLIENT_SECRET")
     SPOTIPY_REDIRECT_URI: str = os.getenv("SPOTIPY_REDIRECT_URI")
     FRONTEND_APP_URL: str = os.getenv("FRONTEND_APP_URL")
-    GENIUS_API_KEY: str = os.getenv("GENIUS_API_KEY") # เพิ่ม Genius API Key
-    LASTFM_API_KEY: str = os.getenv("lastfm_api_key") # เพิ่ม Last.fm API Key
-    LASTFM_API_SECRET: str = os.getenv("lastfm_api_key_secret") # เพิ่ม Last.fm API Secret
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY") 
+    GENIUS_API_KEY: str = os.getenv("GENIUS_API_KEY")
+    LASTFM_API_KEY: str = os.getenv("lastfm_api_key")
+    LASTFM_API_SECRET: str = os.getenv("lastfm_api_key_secret")
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY")
+    
+    # --- New Database Config (XAMPP/MySQL) ---
+    DB_HOST: str = os.getenv("DB_HOST", "localhost")
+    DB_USER: str = os.getenv("DB_USER", "root")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "") # Default XAMPP password is empty
+    DB_NAME: str = os.getenv("DB_NAME", "spotify_project_db")
 
     @classmethod
     def validate(cls):
-        """ตรวจสอบว่า Environment Variables ที่จำเป็นถูกตั้งค่าหรือไม่"""
-        #if not cls.GEMINI_API_KEY:
-            #raise ValueError("GEMINI_API_KEY environment variable not set.")
-        if not cls.GROQ_API_KEY: # ✅ เช็ค Groq แทน
+        """Check for required environment variables."""
+        if not cls.GROQ_API_KEY:
              raise ValueError("GROQ_API_KEY environment variable not set.")
-        if not cls.SPOTIPY_CLIENT_ID or not cls.SPOTIPY_CLIENT_SECRET or not cls.SPOTIPY_REDIRECT_URI:
-            raise ValueError("Spotify API credentials (SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, SPOTIPY_REDIRECT_URI) not set.")
-        if not cls.FRONTEND_APP_URL:
-            raise ValueError("FRONTEND_APP_URL environment variable not set. Please set it to the full URL of your web_app_ui.html file.")
-        if not cls.GENIUS_API_KEY: # เพิ่มการตรวจสอบ Genius API Key
-            raise ValueError("GENIUS_API_KEY environment variable not set.")
+        if not cls.SPOTIPY_CLIENT_ID or not cls.SPOTIPY_CLIENT_SECRET:
+            raise ValueError("Spotify credentials not set.")
+        # Ensure DB config is present (defaults handle local XAMPP, but good to check)
+        if not cls.DB_HOST or not cls.DB_NAME:
+            raise ValueError("Database configuration (DB_HOST, DB_NAME) is missing.")
 
-# ตรวจสอบ Config เมื่อเริ่มต้นแอป
 Config.validate()
