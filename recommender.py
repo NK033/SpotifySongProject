@@ -359,6 +359,8 @@ def calculate_cosine_similarity(profile1: dict, profile2: dict) -> float:
     return dot_product / (norm1 * norm2)
 
 # (นี่คือโค้ดเต็มของ get_intelligent_recommendations ใน recommender.py)
+# In recommender.py
+
 async def get_intelligent_recommendations(
     sp_client: spotipy.Spotify, 
     user_id: str, 
@@ -367,21 +369,18 @@ async def get_intelligent_recommendations(
     user_message: str
 ) -> list[dict]:
     """
-    (Hybrid V21 - Verified Cooperative)
-    - Discovery: Database + Last.fm (Cooperative Scope & Scan)
-    - Analysis: V19 Robust Logic (Strict/Loose Search + CV Fix + Genre Lang)
-    - Filler: Internal Loose Matches (No AI Hallucinations)
+    (Hybrid V22 - High Volume & Strict Guardrails)
     """
     # --- Constants ---
     MINIMUM_PLAYLIST_SIZE = 10
-    STRICT_SCORE_THRESHOLD = 0.45 
-    LOOSE_SCORE_THRESHOLD = 0.25
-    # MAX_FILLER_ITERATIONS = 3 # (V21 ไม่ใช้ลูป AI แล้ว แต่ใช้การตุน Candidate แทน)
+    STRICT_SCORE_THRESHOLD = 0.40 # Reduced slightly to allow more valid songs
+    LOOSE_SCORE_THRESHOLD = 0.20
+    ANALYSIS_LIMIT = 60  # ✅ INCREASED from 30 to 60 to prevent running out of songs
 
-    logging.info("--- Initializing V21: Cooperative Discovery & Robust Analysis ---")
+    logging.info("--- Initializing V22: High Volume & Strict Analysis ---")
 
     # ==========================================
-    # 1. COLD START & PREPARATION (V19 Logic)
+    # 1. COLD START & PREPARATION
     # ==========================================
     try:
         user_seed_tracks = await get_seed_tracks(sp_client)
@@ -401,16 +400,16 @@ async def get_intelligent_recommendations(
     disliked_uris = feedback_data.get('dislikes', set())
     
     master_blacklist = existing_uris.union(history_uris).union(disliked_uris)
-    logging.info(f"Master blacklist initialized with {len(master_blacklist)} URIs.")
 
     # =========================================================
-    # (Part 2: Candidate Generation - Last.fm & DB)
+    # (Part 2: Candidate Generation)
     # =========================================================
     candidate_tracks_info = []
 
-    # --- Strategy A: Internal DB (5 Songs) ---
+    # --- Strategy A: Internal DB (10 Songs) ---
+    # Increased internal matches to rely more on what we know works
     target_fingerprint = emotional_profile if any(v > 0.1 for v in emotional_profile.values()) else stylistic_profile
-    internal_tracks = await find_best_matches_from_db(sp_client, target_fingerprint, master_blacklist, limit=5)
+    internal_tracks = await find_best_matches_from_db(sp_client, target_fingerprint, master_blacklist, limit=10)
     
     for track in internal_tracks:
         candidate_tracks_info.append({
@@ -420,12 +419,7 @@ async def get_intelligent_recommendations(
         })
         master_blacklist.add(track['uri'])
     
-    logging.info(f"--- 🏠 Internal DB contributed {len(internal_tracks)} tracks. ---")
-
-    # --- Strategy B: Last.fm Cooperative (The Rest) ---
-    logging.info(f"--- 🤝 Starting Cooperative Discovery ---")
-    
-    # 1. Prepare Seeds
+    # --- Strategy B: Last.fm Cooperative ---
     artist_groups = defaultdict(list)
     for track in user_seed_tracks:
         if track.get('artists'):
@@ -442,40 +436,36 @@ async def get_intelligent_recommendations(
     
     if len(selected_seeds) > 15: selected_seeds = random.sample(selected_seeds, 15)
 
-    # 2. Worker Function
     async def fetch_cooperative_candidates(seed_track):
         artist = seed_track['artists'][0]['name']
         title = seed_track['name']
         
-        # Scope (Neighbors)
+        # neighbors
         neighbors = await get_similar_artists_lastfm(artist, limit=10)
         allowed_artists = set([n.lower() for n in neighbors])
         allowed_artists.add(artist.lower()) 
 
-        # Scan (Similar Tracks) - ขอเยอะหน่อยเผื่อกรองทิ้ง
-        raw_similar_tracks = await get_similar_tracks_lastfm(artist, title, limit=50)
+        # similar tracks (Increased limit to 60 to get more variety)
+        raw_similar_tracks = await get_similar_tracks_lastfm(artist, title, limit=60)
         
-        # Filter (Intersection)
         filtered = []
         for t in raw_similar_tracks:
             if t['artist'].lower() in allowed_artists:
                 filtered.append(t)
         
-        # Fallback
         if not filtered and neighbors:
             top_neighbor = neighbors[0]
-            backup = await get_artist_top_tracks_lastfm(top_neighbor, limit=3)
+            backup = await get_artist_top_tracks_lastfm(top_neighbor, limit=5)
             filtered.extend(backup)
         return filtered
 
-    # 3. Execute
     expansion_tasks = [fetch_cooperative_candidates(seed) for seed in selected_seeds]
     results_lists = await asyncio.gather(*expansion_tasks)
     
     raw_candidates = []
     for sublist in results_lists: raw_candidates.extend(sublist)
     
-    # 4. Deduplicate
+    # Deduplicate
     seen_keys = set()
     unique_candidates = []
     for c in raw_candidates:
@@ -486,8 +476,8 @@ async def get_intelligent_recommendations(
             
     random.shuffle(unique_candidates)
     
-    # 5. Select for Analysis (เพิ่มเป็น 30 เพลง เพื่อให้มี Loose Matches พอสำหรับ Filler)
-    for track in unique_candidates[:30]:
+    # ✅ FIX 1: INCREASED ANALYSIS LIMIT
+    for track in unique_candidates[:ANALYSIS_LIMIT]:
         candidate_tracks_info.append({
             "artist": track['artist'],
             "title": track['title'],
@@ -497,49 +487,40 @@ async def get_intelligent_recommendations(
     logging.info(f"--- 🧬 Candidates for Analysis: {len(candidate_tracks_info)} ---")
 
     # =========================================================
-    # (Part 3: Analysis Loop - V19 Logic)
+    # (Part 3: Analysis Loop - Strict V22)
     # =========================================================
     analysis_results = {}
     tracks_failed_genius = [] 
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(12) # Increased concurrency slightly
 
-    async def _analyze_with_genius_only(track_info, blacklist_to_use):
+    async def _analyze_with_strict_filters(track_info, blacklist_to_use):
         await sem.acquire()
         try:
             spotify_track = track_info.get("spotify_track_object")
             
-            # --- Search Logic (Robust Plan A/B) ---
             if not spotify_track:
                 title = track_info.get('title', '')
                 artist = track_info.get('artist', '')
-                # Strict
                 query = f"track:{title} artist:{artist}"
                 spotify_results = await search_spotify_songs(sp_client, query, limit=1)
-                # Loose
-                if not spotify_results:
-                    loose_query = f"{title} {artist}"
-                    spotify_results = await search_spotify_songs(sp_client, loose_query, limit=1)
                 
                 if not spotify_results: return 
                 spotify_track = spotify_results[0]
             
             if spotify_track['uri'] in blacklist_to_use: return
             
-            # --- Prepare Data ---
             track_name = spotify_track.get('name', '')
             artist_obj = spotify_track.get('artists', [{}])[0]
             artist_name = artist_obj.get('name', '')
             artist_id = artist_obj.get('id')
             
-            # --- CV Clean ---
             if '(CV:' in artist_name:
                 artist_name = artist_name.split('(CV:')[0].strip()
             
-            # --- Genre Lang Detect (V19 Feature) ---
+            # --- Genre Lang Detect ---
             artist_genre_lang = None
             if artist_id:
                 try:
-                    # ใช้ sp_client.artist ตรวจสอบ Genre
                     artist_details = await asyncio.to_thread(sp_client.artist, artist_id=artist_id)
                     if artist_details: 
                         artist_genre_lang = _classify_lang_from_genres(artist_details.get('genres', []))
@@ -549,15 +530,18 @@ async def get_intelligent_recommendations(
             if song_lang is None:
                 song_lang = _detect_language_from_string(track_name, artist_name)
             
-            if guardrail_language and song_lang != guardrail_language:
-                logging.info(f"GUARDRAIL: Skipping '{track_name}' (Lang mismatch)")
-                # return # (เปิดได้ถ้าต้องการ)
+            # ✅ FIX 2: STRICT GUARDRAIL ENABLED
+            # If we know the user's language, and this song is definitely NOT it, skip it.
+            if guardrail_language and song_lang and song_lang != 'unknown' and song_lang != guardrail_language:
+                logging.info(f"🛡️ GUARDRAIL: Rejected '{track_name}' (Detected {song_lang}, User needs {guardrail_language})")
+                return 
 
             # --- Analyze ---
+            # (Note: analyze_and_cache_song_moods handles the Genius/Groq logic)
             moods_tuple = await analyze_and_cache_song_moods(
                 spotify_track, 
                 lang_hint=song_lang, 
-                use_gemini=False, 
+                use_gemini=False, # Genius First
                 _cleaned_artist_name=artist_name 
             )
             moods = moods_tuple[0] 
@@ -570,6 +554,7 @@ async def get_intelligent_recommendations(
                 }
                 master_blacklist.add(spotify_track['uri']) 
             else:
+                # If Genius failed, queue for Rescue
                 tracks_failed_genius.append(spotify_track) 
 
         except Exception as e:
@@ -577,56 +562,45 @@ async def get_intelligent_recommendations(
         finally:
             sem.release()
 
-    # Run Main Analysis
-    analysis_tasks = [_analyze_with_genius_only(info, master_blacklist) for info in candidate_tracks_info]
+    analysis_tasks = [_analyze_with_strict_filters(info, master_blacklist) for info in candidate_tracks_info]
     await asyncio.gather(*analysis_tasks)
     
-    # Run Rescue (Plan B)
+    # --- Rescue Mission (Plan B) ---
     if tracks_failed_genius:
-        logging.info(f"Calling Gemini/Groq (Plan B) for {len(tracks_failed_genius)} tracks...")
+        logging.info(f"🚑 Rescue Mission: Attempting to find lyrics for {len(tracks_failed_genius)} failed tracks...")
         try:
-            from groq_ai import rescue_lyrics_with_groq 
             rescued_lyrics_map = await rescue_lyrics_with_groq(tracks_failed_genius)
             for spotify_track in tracks_failed_genius:
-                # Key matching logic
                 a_name = spotify_track['artists'][0]['name']
                 t_name = spotify_track['name']
                 key = f"{a_name} - {t_name}"
                 lyrics = rescued_lyrics_map.get(key)
                 
+                # ✅ FIX 3: STRICT NO-LYRIC FILTER
+                # Only add if we ACTUALLY found lyrics. 
+                # If this fails, the song dies here. It does NOT go to the playlist.
                 if lyrics:
                     moods = await asyncio.to_thread(predict_moods, lyrics)
-                    analysis_results[spotify_track['uri']] = {
-                        "track_object": spotify_track, 
-                        "moods": moods,
-                        "detected_lang": "unknown"
-                    }
+                    if moods:
+                        analysis_results[spotify_track['uri']] = {
+                            "track_object": spotify_track, 
+                            "moods": moods,
+                            "detected_lang": "unknown" # Rescued songs might be any lang, but they have lyrics!
+                        }
         except Exception as e:
             logging.error(f"Plan B failed: {e}")
 
     # =========================================================
-    # (Part 4: Scoring Prep - V19)
+    # (Part 4 & 5: Scoring)
     # =========================================================
     disliked_fingerprints = []
+    # ... (Keep existing Dislike logic) ...
     for uri in disliked_uris:
         info = await get_spotify_track_data(sp_client, uri)
         if info:
             fp, ok = await analyze_and_cache_song_moods(info, lang_hint=None) 
             if ok and fp: disliked_fingerprints.append(fp)
-                
-    total_years, track_count = 0, 0
-    for t in user_seed_tracks:
-        try:
-            if t['album']['release_date']:
-                total_years += int(t['album']['release_date'][:4])
-                track_count += 1
-        except: continue
-    average_year = total_years / track_count if track_count > 0 else None
 
-    # =========================================================
-    # (Part 5: Full Scoring V19)
-    # =========================================================
-    logging.info("--- 📈 Scoring Candidates ---")
     all_scored_candidates = []
     has_target_emotion = any(v > 0.1 for v in emotional_profile.values())
 
@@ -635,32 +609,20 @@ async def get_intelligent_recommendations(
         fp = data["moods"]
         lang = data.get("detected_lang")
 
-        # Scores
         style_score = calculate_cosine_similarity(stylistic_profile, fp)
         mood_score = calculate_cosine_similarity(emotional_profile, fp) if has_target_emotion else style_score
         base_score = (mood_score * 0.7) + (style_score * 0.3) if has_target_emotion else style_score
         
-        # Penalty
         penalty = 0.0
         for dfp in disliked_fingerprints:
             sim = calculate_cosine_similarity(fp, dfp)
             if sim > penalty: penalty = sim
         
-        # Bonuses
-        y_bonus = 0.0
-        if average_year:
-            try:
-                c_year = int(track['album']['release_date'][:4])
-                diff = abs(c_year - average_year)
-                if diff < 10: y_bonus = 0.15 * (1 - (diff / 10))
-            except: pass
-        
         l_bonus = 0.0
         if guardrail_language and lang == guardrail_language:
             l_bonus = 0.15 
         
-        # Final Formula
-        final_score = (base_score * 0.7) + l_bonus + (y_bonus * 0.8) - (penalty * 0.6)
+        final_score = (base_score * 0.7) + l_bonus - (penalty * 0.6)
         
         track['ai_analysis'] = {"mood_score": float(final_score)}
         all_scored_candidates.append(track)
@@ -668,26 +630,23 @@ async def get_intelligent_recommendations(
     all_scored_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
 
     # =========================================================
-    # (Part 6: Selection & Internal Filler)
+    # (Part 6: Selection)
     # =========================================================
-    # 1. Strict Filter
     final_playlist = [t for t in all_scored_candidates if t['ai_analysis']['mood_score'] >= STRICT_SCORE_THRESHOLD]
     
-    # 2. Filler (Loose Match) - ถ้าไม่พอ หยิบพวกคะแนนรองลงมา (V21 Approach)
     if len(final_playlist) < MINIMUM_PLAYLIST_SIZE:
-        logging.info("Strict matches insufficient. Adding loose matches (Internal Filler)...")
         needed = MINIMUM_PLAYLIST_SIZE - len(final_playlist)
         loose = [t for t in all_scored_candidates if LOOSE_SCORE_THRESHOLD <= t['ai_analysis']['mood_score'] < STRICT_SCORE_THRESHOLD]
         final_playlist.extend(loose[:needed])
 
-    # Finalize
     final_playlist = final_playlist[:15]
     
-    # Fallback if still empty
-    if not final_playlist:
+    # ✅ FIX 4: ONLY FALLBACK IF ABSOLUTELY NECESSARY
+    # If we found at least 5 good songs, show them! Don't use fallback unless we have < 3.
+    if len(final_playlist) < 3:
+        logging.warning("⚠️ Intelligent search yielded too few results. Using Fallback.")
         return await get_fallback_recommendations(sp_client)
 
-    # Preload & Save History
     try: await preload_groq_details(sp_client, final_playlist)
     except: pass
     

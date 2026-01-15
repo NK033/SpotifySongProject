@@ -288,6 +288,7 @@ async def chat_endpoint(
         
 
         # --- (Path 1: Get Recommendations - คง Logic เดิม เปลี่ยนแค่ตัววิเคราะห์) ---
+        # --- (Path 1: Get Recommendations) ---
         if "get_recommendations" in intent:
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
@@ -297,13 +298,16 @@ async def chat_endpoint(
 
             IS_SYSTEM_BUSY = True
             try:
-                # Only try this if the client actually has an auth manager (which it usually doesn't here)
-                if hasattr(sp_client, "auth_manager") and sp_client.auth_manager:
-                    token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
-                    background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
-            except Exception as e:
-                logging.warning(f"Skipping background profile update in chat: {e}")
+                # --- 1. Auth Check (Wrapped in its own internal try/except) ---
+                try:
+                    # Only try this if the client actually has an auth manager
+                    if hasattr(sp_client, "auth_manager") and sp_client.auth_manager:
+                        token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
+                        background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
+                except Exception as e:
+                    logging.warning(f"Skipping background profile update in chat: {e}")
 
+                # --- 2. Main Logic (แก้ไขแล้ว: ขยับออกมาด้านซ้าย ไม่ให้อยู่ใน except) ---
                 logging.info("Executing intelligent recommendation path (V7 - Generic Bypass).") 
                 
                 historical_profile = await get_user_mood_profile(user_id)
@@ -322,7 +326,7 @@ async def chat_endpoint(
                     logging.info(f"Generic request detected. Using PURE User Taste Profile.")
                 else:
                     logging.info(f"Specific request detected. Analyzing request emotion...")
-                    # ✅ เปลี่ยนตรงนี้: ใช้ Groq วิเคราะห์อารมณ์แทน
+                    # ✅ ใช้ Groq วิเคราะห์อารมณ์แทน
                     emotional_profile = await get_emotional_profile_from_groq(user_message)
                 
                 # --- เรียก Recommender ---
@@ -347,7 +351,7 @@ async def chat_endpoint(
                 3. Max 3-4 sentences.
                 4. Respond in Thai only.
                 """
-                # ✅ ใช้ Groq (FAST_MODEL) เขียนคำตอบ
+                
                 final_response = await groq_client.chat.completions.create(
                     model=FAST_MODEL,
                     messages=[{"role": "user", "content": presentation_prompt}]
