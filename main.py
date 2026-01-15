@@ -297,9 +297,12 @@ async def chat_endpoint(
 
             IS_SYSTEM_BUSY = True
             try:
-                if user_id and sp_client.auth_manager.cache_handler.get_cached_token():
+                # Only try this if the client actually has an auth manager (which it usually doesn't here)
+                if hasattr(sp_client, "auth_manager") and sp_client.auth_manager:
                     token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
                     background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
+            except Exception as e:
+                logging.warning(f"Skipping background profile update in chat: {e}")
 
                 logging.info("Executing intelligent recommendation path (V7 - Generic Bypass).") 
                 

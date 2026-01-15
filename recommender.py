@@ -785,8 +785,13 @@ async def update_user_profile_background(token_info: dict, user_id: str):
 
         profile_data = await get_user_mood_profile_with_timestamp(user_id)
         if profile_data:
-            last_updated_str = profile_data['timestamp']
-            last_updated_dt = datetime.strptime(last_updated_str, '%Y-%m-%d %H:%M:%S')
+            last_updated_val = profile_data['timestamp']
+
+            if isinstance(last_updated_val, str):
+                last_updated_dt = datetime.strptime(last_updated_val, '%Y-%m-%d %H:%M:%S')
+            else:
+                # It's already a datetime object (from MySQL)
+                last_updated_dt = last_updated_val
 
             if datetime.now() - last_updated_dt < timedelta(hours=1):
                 logging.info(f"BACKGROUND TASK: Profile for {user_id} is recent. Skipping update.")
