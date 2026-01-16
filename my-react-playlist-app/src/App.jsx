@@ -1,3 +1,4 @@
+// src/App.jsx
 import React from 'react';
 import { useAppContext } from './contexts/AppContext';
 import Sidebar from './components/Sidebar';

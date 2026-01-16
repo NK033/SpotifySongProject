@@ -1,27 +1,28 @@
+// src/components/LiveAgent.jsx
 import React, { useState, useEffect } from 'react';
 import '../App.css'; 
 
 // ✅ 1. รับ props { onSendMessage } เข้ามา
 const LiveAgent = ({ onSendMessage }) => {
   const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  // หมายเหตุ: ไม่ต้องใช้ state loading ในนี้แล้ว เพราะจะใช้ Global Loading แทน
 
-  // --- ขออนุญาตแจ้งเตือน ---
+  // --- 1. ขออนุญาตแจ้งเตือน ---
   useEffect(() => {
     if (Notification.permission !== "granted") {
       Notification.requestPermission();
     }
   }, []);
 
-  // --- ส่งแจ้งเตือน (System Notification) ---
+  // --- 2. ฟังก์ชันส่งแจ้งเตือน (System Notification) ---
   const sendSystemNotification = (data) => {
     if (Notification.permission === "granted" && document.hidden) {
       new Notification(`🎵 Now Playing: ${data.name}`, {
         body: `AI: "${data.notification}"`,
         icon: data.cover,
-        silent: false
+        silent: false 
       });
     }
   };
@@ -58,6 +59,8 @@ const LiveAgent = ({ onSendMessage }) => {
             console.log("🎵 New song detected:", data.name);
             setStatus(data);
             setIsVisible(true);
+            
+            // เรียกใช้ฟังก์ชันแจ้งเตือนตรงนี้
             sendSystemNotification(data); 
 
           } else if (!data.is_playing) {
@@ -75,34 +78,33 @@ const LiveAgent = ({ onSendMessage }) => {
     return () => clearInterval(intervalId);
   }, [status]);
 
-  // Auto-Close logic
+  // Auto-Close
   useEffect(() => {
-    if (isVisible && !loading && !isHovered) {
+    if (isVisible && !isHovered) {
       const timer = setTimeout(() => {
         setIsVisible(false);
       }, 15000);
       return () => clearTimeout(timer);
     }
-  }, [isVisible, loading, isHovered, status]);
+  }, [isVisible, isHovered, status]);
 
+  // ✅ 3. แก้ไขฟังก์ชันนี้ (หัวใจสำคัญ)
   const handleArrangePlaylist = async () => {
     if (!status) return;
-    setLoading(true);
     
     const prompt = `ช่วยจัด Playlist ต่อเนื่องจากเพลง "${status.name}" ของ "${status.artist}" ให้หน่อย เอาแนว "${status.mood_data ? Object.keys(status.mood_data)[0] : 'คล้ายๆ กัน'}"`;
     
     try {
-        // ✅ 2. ใช้ onSendMessage แทน fetch
-        // ส่ง intent เป็น 'get_recommendations' เพื่อความแม่นยำ
-        await onSendMessage(prompt, 'get_recommendations');
+        // ✅ เรียกใช้ onSendMessage ที่ส่งมาจาก App.jsx
+        // ส่ง prompt และระบุ intent ชัดเจน
+        onSendMessage(prompt, 'get_recommendations');
         
-        // ไม่ต้อง alert แล้ว เพราะผลลัพธ์จะไปโผล่ใน Chat
-        setLoading(false);
+        // ปิดหน้าต่าง Live Agent ทันที 
+        // (เพราะ Loading Overlay ของแอปหลักจะเด้งขึ้นมาแทน ทำให้รู้ว่าทำงานอยู่)
         setIsVisible(false);
+        
     } catch (e) {
-        console.error("Error sending message:", e);
-        alert("เกิดข้อผิดพลาดในการสั่งงาน AI");
-        setLoading(false);
+        console.error("Error sending message from LiveAgent:", e);
     }
   };
 
@@ -151,14 +153,13 @@ const LiveAgent = ({ onSendMessage }) => {
 
       <button 
         onClick={handleArrangePlaylist}
-        disabled={loading}
         style={{
-          width: '100%', padding: '10px', backgroundColor: loading ? '#555' : '#1db954', 
+          width: '100%', padding: '10px', backgroundColor: '#1db954', 
           border: 'none', borderRadius: '30px', color: 'white', fontWeight: 'bold', 
-          cursor: loading ? 'not-allowed' : 'pointer', transition: 'transform 0.1s',
+          cursor: 'pointer', transition: 'transform 0.1s',
           fontSize: '13px'
       }}>
-        {loading ? 'Sending to Chat...' : '✨ Create this Playlist!'}
+        ✨ Create this Playlist!
       </button>
     </div>
   );

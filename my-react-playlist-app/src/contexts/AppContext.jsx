@@ -1,190 +1,228 @@
+// src/contexts/AppContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import * as api from '../api';
+import { 
+  fetchUserProfile, 
+  sendMessageToChatbot, 
+  createPlaylistAPI, 
+  getSongDetailsAPI, 
+  sendFeedbackAPI, 
+  pinPlaylistAPI,
+  deletePinnedPlaylistAPI,
+  updatePinnedPlaylistAPI,
+  summarizePlaylistAPI,
+  getSuggestedPromptsAPI 
+} from '../api';
 
-// Create the context
 const AppContext = createContext();
 
-// Create a custom hook to easily access the context
-export const useAppContext = () => {
-  return useContext(AppContext);
-};
-
-// Create the provider component that will wrap our app
 export const AppProvider = ({ children }) => {
-  // --- State Management ---
+  // --- States ---
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState([
-    {
-      id: Date.now() + Math.random(), // เพิ่ม ID
-      isUser: false,
-      message: 'สวัสดีครับ! ผมคือ AI ที่จะช่วยคุณค้นหา วิเคราะห์ และสร้างเพลย์ลิสต์เพลง ลองพิมพ์บอกผมได้เลยครับ',
-      songs: null,
-      recommendationText: ''
+    { 
+      id: 1, 
+      isUser: false, 
+      message: "สวัสดีครับ! ผมคือ AI Music Assistant 🎵\nอยากให้ช่วยแนะนำเพลงแบบไหน หรือจัด Playlist อารมณ์ไหน บอกผมได้เลยครับ!" 
     }
   ]);
   const [userInput, setUserInput] = useState('');
-  const [isFetching, setIsFetching] = useState(false);
-  const [currentTheme, setCurrentTheme] = useState(localStorage.getItem('theme') || 'dark');
+  const [isFetching, setIsFetching] = useState(false); // ควบคุม Loading Overlay
+  const [currentTheme, setCurrentTheme] = useState('dark');
   const [currentRecommendedSongs, setCurrentRecommendedSongs] = useState([]);
+  const [userInfo, setUserInfo] = useState(null);
   const [pinnedPlaylists, setPinnedPlaylists] = useState([]);
-  const [showSongModal, setShowSongModal] = useState(false);
-  const [modalSong, setModalSong] = useState(null);
-  const [modalAnalysis, setModalAnalysis] = useState('');
-  const [userInfo, setUserInfo] = useState({
-    displayName: 'User',
-    avatar: 'https://placehold.co/100x100/1DB954/ffffff?text=U',
-    isLoggedIn: false,
-  });
-
-  // --- State for Modals ---
+  
+  // Modal States
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [playlistToRename, setPlaylistToRename] = useState(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [playlistToDelete, setPlaylistToDelete] = useState(null);
-  const [isSubmitting, setIsSubmitting] = useState(false); // Loading state for modals
+  const [showSongModal, setShowSongModal] = useState(false);
+  const [modalSong, setModalSong] = useState(null);
+  const [modalAnalysis, setModalAnalysis] = useState(null);
+  const [suggestedPrompts, setSuggestedPrompts] = useState([]);
 
-  // --- State for Dynamic Prompts ---
-  const [suggestedPrompts, setSuggestedPrompts] = useState([
-    '🎵 แนะนำเพลงส่วนตัวให้หน่อย',
-    '📈 ขอเพลงฮิตติดชาร์ต',
-  ]);
+  // --- Effects ---
+  useEffect(() => {
+    const token = localStorage.getItem('spotify_access_token');
+    if (token) {
+      handleFetchUserProfile();
+      fetchPinnedPlaylists();
+      fetchSuggestedPrompts();
+    }
+  }, []);
 
-  // --- Helper Functions ---
-  const addMessageToHistory = (message, isUser, songs = null, recommendationText = '') => {
-    const newItem = {
-      id: Date.now() + Math.random(), // ใช้ ID ที่ unique
-      message,
-      isUser,
-      songs,
-      recommendationText
-    };
-    setChatHistory(prev => [...prev, newItem]);
+  // --- Actions ---
+  const handleFetchUserProfile = async () => {
+    try {
+      const data = await fetchUserProfile();
+      setUserInfo(data);
+    } catch (error) {
+      console.error("Failed to fetch user profile", error);
+    }
   };
 
-  // --- Core Logic Functions ---
-  const handleSpotifyLogin = () => { window.location.href = '/spotify_login'; };
-
-  const handleSpotifyLogout = () => {
-    localStorage.clear();
-    updateUIForLoginState();
-    setPinnedPlaylists([]);
-    addMessageToHistory('ออกจากระบบ Spotify แล้ว', false);
-    // Reset prompts to default
-    setSuggestedPrompts([
-      '🎵 แนะนำเพลง J-Pop สนุกๆ',
-      '📈 ขอเพลงฮิตติดชาร์ต',
-      '🎧 หาเพลงเศร้าๆ'
-    ]);
+  const fetchPinnedPlaylists = async () => {
+    if (!userInfo?.id) return;
+    try {
+      const playlists = await import('../api').then(module => module.getPinnedPlaylistsAPI());
+      setPinnedPlaylists(playlists);
+    } catch (error) {
+      console.error("Failed to fetch pinned playlists", error);
+    }
   };
 
-  const updateUIForLoginState = () => {
-    const displayName = localStorage.getItem('spotify_display_name');
-    const avatar = localStorage.getItem('spotify_avatar');
-    const isLoggedIn = !!localStorage.getItem('spotify_access_token') && !!displayName;
-    setUserInfo({ displayName: displayName || 'User', avatar: avatar || 'https://placehold.co/100x100/1DB954/ffffff?text=U', isLoggedIn });
+  const fetchSuggestedPrompts = async () => {
+    try {
+        const data = await getSuggestedPromptsAPI();
+        if (data && data.prompts) {
+            setSuggestedPrompts(data.prompts);
+        }
+    } catch (error) {
+        console.error("Failed to fetch prompts", error);
+    }
   };
-  
-  // (แก้ไข) รับ messageOverride เพื่อแก้บั๊กปุ่มลัด
-  const sendMessageToBackend = async (messageOverride = null) => {
-    const userMessage = (messageOverride || userInput).trim();
+
+  // ✅✅✅ แก้ไขฟังก์ชันนี้ (หัวใจสำคัญ) ✅✅✅
+  // รองรับ messageOverride และ intentOverride เพื่อให้ LiveAgent สั่งงานได้
+  const sendMessageToBackend = async (messageOverride = null, intentOverride = null) => {
     
-    if (isFetching || userMessage === '') return;
+    // 1. ตัดสินใจว่าจะใช้ข้อความจากไหน (จาก LiveAgent หรือจากช่องพิมพ์ปกติ)
+    const messageToSend = messageOverride || userInput;
+    
+    if (!messageToSend.trim()) return;
 
-    addMessageToHistory(userMessage, true);
-    setUserInput('');
-    setIsFetching(true);
-    setCurrentRecommendedSongs([]);
+    // 2. เคลียร์ช่องพิมพ์ (ถ้าเป็นการพิมพ์ปกติ)
+    if (!messageOverride) {
+        setUserInput('');
+    }
+
+    // 3. เพิ่มข้อความ User ลงใน Chat History ทันที (เพื่อให้เห็นว่าสั่งแล้ว)
+    const newUserMsg = { id: Date.now(), isUser: true, message: messageToSend };
+    setChatHistory(prev => [...prev, newUserMsg]);
+
+    // 4. เปิด Loading Overlay (เพื่อให้รู้ว่ากำลังทำงาน)
+    setIsFetching(true); 
 
     try {
-      const data = await api.postChatMessage(userMessage); 
-      const songs = (data.songs_found && data.songs_found.length > 0) ? data.songs_found : [];
-      addMessageToHistory(data.response || '', false, songs, data.response);
-      if (songs.length > 0) {
-        setCurrentRecommendedSongs(songs);
+      // 5. ส่งไป Backend
+      const data = await sendMessageToChatbot(messageToSend, intentOverride);
+      
+      // 6. เพิ่มคำตอบ AI ลง Chat History
+      const newAiMsg = { 
+        id: Date.now() + 1, 
+        isUser: false, 
+        message: data.response, 
+        songs: data.songs_found || [],
+        recommendationText: data.response 
+      };
+      setChatHistory(prev => [...prev, newAiMsg]);
+
+      // 7. อัปเดตเพลงแนะนำล่าสุด (ถ้ามี)
+      if (data.songs_found && data.songs_found.length > 0) {
+        setCurrentRecommendedSongs(data.songs_found);
       }
+
     } catch (error) {
-      addMessageToHistory(`ขออภัยค่ะ เกิดข้อผิดพลาด: ${error.message}`, false);
+      console.error("Error sending message:", error);
+      const errorMsg = { id: Date.now() + 2, isUser: false, message: "ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์" };
+      setChatHistory(prev => [...prev, errorMsg]);
+    } finally {
+      // 8. ปิด Loading Overlay
+      setIsFetching(false);
+    }
+  };
+
+  const handleCreatePlaylist = async () => {
+    if (currentRecommendedSongs.length === 0) return;
+    const trackUris = currentRecommendedSongs.map(song => song.uri);
+    setIsFetching(true);
+    try {
+      await createPlaylistAPI("AI Recommended Playlist", trackUris);
+      alert("Playlist created successfully on Spotify!");
+    } catch (error) {
+      console.error("Failed to create playlist", error);
+      alert("Failed to create playlist.");
     } finally {
       setIsFetching(false);
     }
   };
-  
-  const handleCreatePlaylist = async () => {
-    if (currentRecommendedSongs.length === 0) return;
-    const playlistName = `AI Playlist: ${new Date().toLocaleString('th-TH')}`;
-    const trackUris = currentRecommendedSongs.map(s => s.uri);
-    setIsFetching(true);
-    try {
-        const result = await api.createSpotifyPlaylist(playlistName, trackUris);
-        const successMessage = `สร้างเพลย์ลิสต์ '${playlistName}' ให้เรียบร้อยแล้วครับ! <a href="${result.playlist_info.external_urls.spotify}" target="_blank" class="inline-block mt-2 text-sm py-2 px-4 rounded-full bg-green-500 text-white hover:bg-green-600"><i class="fab fa-spotify mr-2"></i> เปิดใน Spotify</a>`;
-        addMessageToHistory(successMessage, false);
-    } catch (error) {
-        addMessageToHistory('ขออภัยครับ เกิดข้อผิดพลาดในการสร้างเพลย์ลิสต์', false);
-    } finally {
-        setIsFetching(false);
-    }
-  };
 
   const handleShowDetails = async (song) => {
-    setModalSong(song);
-    setModalAnalysis('<p>กำลังโหลดการวิเคราะห์...</p>');
-    setShowSongModal(true);
+    setIsFetching(true);
     try {
-      const details = await api.fetchSongDetails(song.uri);
-      const analysisHtml = details.gemini_analysis.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
-      setModalAnalysis(analysisHtml);
+      const details = await getSongDetailsAPI(song.uri);
+      setModalSong(song);
+      setModalAnalysis(details);
+      setShowSongModal(true);
     } catch (error) {
-      setModalAnalysis('<p>ไม่สามารถโหลดข้อมูลการวิเคราะห์ได้</p>');
+      console.error("Failed to fetch song details", error);
+    } finally {
+      setIsFetching(false);
     }
   };
 
-  const handleFeedback = async (trackUri, feedback) => {
-     try {
-        await api.sendFeedback(trackUri, feedback);
-    } catch (error) {
-        addMessageToHistory('กรุณาเข้าสู่ระบบ Spotify ก่อนให้ Feedback ครับ', false);
-    }
-  };
-
-  const handlePinClick = async (songs, recText) => {
+  const handleFeedback = async (uri, feedback) => {
     try {
-        const playlistName = `AI Playlist - ${new Date().toLocaleTimeString('th-TH')}`;
-        await api.pinPlaylist(playlistName, songs, recText);
-        await fetchAndRenderPinnedPlaylists();
+      await sendFeedbackAPI(uri, feedback);
+      console.log(`Feedback sent for ${uri}: ${feedback}`);
     } catch (error) {
-        alert('เกิดข้อผิดพลาดในการ Pin เพลย์ลิสต์');
+      console.error("Failed to send feedback", error);
     }
   };
 
-  // --- Modal Delete Functions ---
-  const handleDeletePinnedPlaylist = (pinId, name) => {
-    setPlaylistToDelete({ pin_id: pinId, name: name });
+  const handlePinClick = async (songs, text) => {
+    const name = prompt("ตั้งชื่อ Playlist ที่จะปักหมุด:", "My AI Playlist");
+    if (name) {
+      setIsFetching(true);
+      try {
+        await pinPlaylistAPI(name, songs, text);
+        fetchPinnedPlaylists();
+      } catch (error) {
+        alert("Failed to pin playlist.");
+      } finally {
+        setIsFetching(false);
+      }
+    }
+  };
+
+  const displayPlaylistFromHistory = (playlist) => {
+    const aiMsg = {
+      id: Date.now(),
+      isUser: false,
+      message: `นี่คือ Playlist ที่คุณปักหมุดไว้: **${playlist.name}**\n${playlist.recommendation_text || ''}`,
+      songs: playlist.songs,
+      recommendationText: playlist.recommendation_text
+    };
+    setChatHistory(prev => [...prev, aiMsg]);
+    setCurrentRecommendedSongs(playlist.songs);
+    if (window.innerWidth < 768) setSidebarOpen(false);
+  };
+
+  const handleDeletePinnedPlaylist = async (pinId) => {
+    setPlaylistToDelete({ id: pinId });
     setIsConfirmModalOpen(true);
   };
 
-  const handleCloseConfirmModal = () => {
-    setIsConfirmModalOpen(false);
-    setPlaylistToDelete(null);
-  };
-
   const handleSubmitDelete = async () => {
-    if (!playlistToDelete) return;
-    setIsSubmitting(true);
-    try {
-      await api.deletePinnedPlaylist(playlistToDelete.pin_id);
-      await fetchAndRenderPinnedPlaylists();
-      handleCloseConfirmModal();
-    } catch (error) {
-      console.error("Delete Pin Error:", error);
-      alert('เกิดข้อผิดพลาดในการลบเพลย์ลิสต์');
-    } finally {
-      setIsSubmitting(false);
+    if (playlistToDelete) {
+      setIsSubmitting(true);
+      try {
+        await deletePinnedPlaylistAPI(playlistToDelete.id);
+        await fetchPinnedPlaylists();
+        setIsConfirmModalOpen(false);
+        setPlaylistToDelete(null);
+      } catch (error) {
+        alert("Failed to delete playlist");
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
-  // --- Modal Rename Functions ---
-  const handleOpenRenameModal = (playlistItem) => {
-    setPlaylistToRename(playlistItem);
+  const handleOpenRenameModal = (playlist) => {
+    setPlaylistToRename(playlist);
     setIsRenameModalOpen(true);
   };
 
@@ -192,160 +230,99 @@ export const AppProvider = ({ children }) => {
     setIsRenameModalOpen(false);
     setPlaylistToRename(null);
   };
-  
+
   const handleSubmitRename = async (newName) => {
-    if (!playlistToRename) return;
-    setIsSubmitting(true);
-    try {
-      await api.updatePinnedPlaylist(playlistToRename.pin_id, newName, playlistToRename.songs);
-      await fetchAndRenderPinnedPlaylists();
-      handleCloseRenameModal();
-    } catch (error) {
-      console.error("Update Pin Error:", error);
-      alert('เกิดข้อผิดพลาดในการอัปเดตชื่อเพลย์ลิสต์');
-    } finally {
-      setIsSubmitting(false);
+    if (playlistToRename && newName) {
+      setIsSubmitting(true);
+      try {
+        await updatePinnedPlaylistAPI(playlistToRename.id, newName, playlistToRename.songs);
+        await fetchPinnedPlaylists();
+        handleCloseRenameModal();
+      } catch (error) {
+        alert("Failed to rename playlist");
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
-  
-  // --- Summarize Function ---
-  const handleSummarizePlaylist = async (item) => {
-    if (!item || !item.songs || item.songs.length === 0) {
-      addMessageToHistory('ขออภัยค่ะ ไม่พบเพลงในรายการนี้ที่จะสรุป', false);
-      return;
-    }
+
+  const handleCloseConfirmModal = () => {
+    setIsConfirmModalOpen(false);
+    setPlaylistToDelete(null);
+  };
+
+  const handleSummarizePlaylist = async (songs) => {
     setIsFetching(true);
     try {
-      const songUris = item.songs.map(s => s.uri);
-      const data = await api.summarizePlaylist(songUris);
-      const playlistName = `"${item.message.split('\n')[0]}"`;
-      addMessageToHistory(`นี่คือบทวิเคราะห์ AI สำหรับเพลย์ลิสต์ ${playlistName}:`, false);
-      addMessageToHistory(data.summary, false);
+        const songUris = songs.map(s => s.uri);
+        const data = await summarizePlaylistAPI(songUris);
+        const summaryMsg = {
+            id: Date.now(),
+            isUser: false,
+            message: `📊 **สรุปภาพรวม Playlist:**\n\n${data.summary}`
+        };
+        setChatHistory(prev => [...prev, summaryMsg]);
     } catch (error) {
-      console.error("Summarize Error:", error);
-      addMessageToHistory('ขออภัยค่ะ ไม่สามารถสรุปเพลย์ลิสต์นี้ได้', false);
+        console.error("Summarize failed", error);
+        alert("เกิดข้อผิดพลาดในการสรุป Playlist");
     } finally {
-      setIsFetching(false);
+        setIsFetching(false);
     }
   };
-
-  // --- Data Fetching Functions ---
-  const fetchAndRenderPinnedPlaylists = async () => {
-    try {
-      const data = await api.fetchPinnedPlaylists();
-      setPinnedPlaylists(data);
-    } catch (error) {
-       // Ignore error if not logged in
-    }
-  };
-
-  const displayPlaylistFromHistory = (pinId) => {
-    const historyItem = pinnedPlaylists.find(p => p.pin_id === pinId);
-    if (!historyItem) return;
-    addMessageToHistory(historyItem.recommendationText, false, historyItem.songs, historyItem.recommendationText);
-    setCurrentRecommendedSongs(historyItem.songs);
-  };
-
+  
   const handleToggleTheme = () => {
-      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-      setCurrentTheme(newTheme);
-      localStorage.setItem('theme', newTheme);
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+    setCurrentTheme(newTheme);
+    document.documentElement.setAttribute('data-theme', newTheme);
   };
 
-  // --- Effects ---
-  useEffect(() => {
-    document.body.className = `${currentTheme}-theme transition-colors duration-300`;
-  }, [currentTheme]);
-
-  useEffect(() => {
-    // Function to load dynamic prompts
-    const loadDynamicPrompts = async () => {
-      try {
-        const data = await api.fetchSuggestedPrompts();
-        if (data && data.prompts) {
-          setSuggestedPrompts(data.prompts);
-        }
-      } catch (error) {
-        console.warn("Using default prompts due to error:", error);
-        // (It will keep the default state)
-      }
-    };
-
-    // Main app initialization
-    const initializeApp = async () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const accessToken = urlParams.get('access_token');
-
-      if (accessToken) {
-        const expiresIn = urlParams.get('expires_in');
-        const refreshToken = urlParams.get('refresh_token');
-        const expiresAt = Date.now() + (parseInt(expiresIn, 10) * 1000);
-        localStorage.setItem('spotify_access_token', accessToken);
-        localStorage.setItem('spotify_expires_at', expiresAt);
-        if (refreshToken) localStorage.setItem('spotify_refresh_token', refreshToken);
-        window.history.replaceState({}, document.title, "/");
-
-        try {
-          const profile = await api.fetchUserProfile();
-          localStorage.setItem('spotify_display_name', profile.display_name);
-          if (profile.images && profile.images.length > 0) {
-            localStorage.setItem('spotify_avatar', profile.images[0].url);
-          }
-          addMessageToHistory('เข้าสู่ระบบ Spotify สำเร็จแล้ว!', false);
-          fetchAndRenderPinnedPlaylists();
-          loadDynamicPrompts(); // <-- Load dynamic prompts
-        } catch (error) {
-           handleSpotifyLogout();
-        }
-      } else if (localStorage.getItem('spotify_access_token')) {
-        // User is already logged in
-        fetchAndRenderPinnedPlaylists();
-        loadDynamicPrompts(); // <-- Load dynamic prompts
-      }
-      updateUIForLoginState();
-    };
-    initializeApp();
-  }, []); // Run once on mount
-
-  // --- Context Value ---
-  const value = {
-    sidebarOpen, setSidebarOpen,
-    chatHistory,
-    userInput, setUserInput,
-    isFetching,
-    currentTheme, handleToggleTheme,
-    currentRecommendedSongs,
-    pinnedPlaylists,
-    showSongModal, setShowSongModal,
-    modalSong,
-    modalAnalysis,
-    userInfo,
-    handleSpotifyLogin,
-    handleSpotifyLogout,
-    sendMessageToBackend,
-    handleCreatePlaylist,
-    handleShowDetails,
-    handleFeedback,
-    handlePinClick,
-    displayPlaylistFromHistory,
-    handleDeletePinnedPlaylist,
-    
-    // Modals
-    isRenameModalOpen,
-    isSubmitting,
-    playlistToRename,
-    handleOpenRenameModal,
-    handleCloseRenameModal,
-    handleSubmitRename,
-    isConfirmModalOpen,
-    playlistToDelete,
-    handleCloseConfirmModal,
-    handleSubmitDelete,
-
-    // Features
-    handleSummarizePlaylist,
-    suggestedPrompts // <-- Expose prompts
+  const handleSpotifyLogin = () => { window.location.href = 'http://localhost:8000/spotify_login'; };
+  const handleSpotifyLogout = () => {
+    localStorage.clear();
+    setUserInfo(null);
+    setPinnedPlaylists([]);
+    window.location.href = '/';
   };
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={{
+      sidebarOpen, setSidebarOpen,
+      chatHistory, setChatHistory,
+      userInput, setUserInput,
+      isFetching, setIsFetching, // ส่งตัวนี้ออกไป
+      currentTheme, setCurrentTheme,
+      currentRecommendedSongs,
+      userInfo,
+      pinnedPlaylists,
+      sendMessageToBackend, // ✅ ฟังก์ชันที่แก้แล้ว
+      handleCreatePlaylist,
+      handleSpotifyLogin,
+      handleSpotifyLogout,
+      handleShowDetails,
+      handleFeedback,
+      handlePinClick,
+      displayPlaylistFromHistory,
+      handleDeletePinnedPlaylist,
+      isRenameModalOpen,
+      isSubmitting,
+      playlistToRename,
+      handleOpenRenameModal,
+      handleCloseRenameModal,
+      handleSubmitRename,
+      isConfirmModalOpen,
+      playlistToDelete,
+      handleCloseConfirmModal,
+      handleSubmitDelete,
+      showSongModal, setShowSongModal,
+      modalSong,
+      modalAnalysis,
+      handleSummarizePlaylist,
+      handleToggleTheme,
+      suggestedPrompts
+    }}>
+      {children}
+    </AppContext.Provider>
+  );
 };
+
+export const useAppContext = () => useContext(AppContext);
