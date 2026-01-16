@@ -25,14 +25,14 @@ function App() {
     handleSpotifyLogout,
     
     // Actions
-    sendMessageToBackend,
+    sendMessageToBackend, // ✅ ฟังก์ชันสำคัญที่เราต้องส่งไป
     handleCreatePlaylist,
     handleShowDetails,
     handleFeedback,
     handlePinClick,
     displayPlaylistFromHistory,
     handleSummarizePlaylist,
-    suggestedPrompts, // <-- ดึง Prompts
+    suggestedPrompts,
     
     // Modals
     handleDeletePinnedPlaylist,
@@ -79,7 +79,7 @@ function App() {
         userInput={userInput}
         onUserInputChange={(e) => setUserInput(e.target.value)}
         onSendMessage={sendMessageToBackend}
-        suggestedPrompts={suggestedPrompts} // <-- ส่ง Prompts
+        suggestedPrompts={suggestedPrompts}
       />
       
       {/* --- Modals --- */}
@@ -108,7 +108,9 @@ function App() {
           onClose={() => setShowSongModal(false)}
         />
       )}
-      <LiveAgent />
+      
+      {/* ✅ แก้ไขตรงนี้: ส่ง props onSendMessage ลงไป */}
+      <LiveAgent onSendMessage={sendMessageToBackend} />
     </div>
   );
 }

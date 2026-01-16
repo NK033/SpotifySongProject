@@ -1,27 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import '../App.css'; 
 
-const LiveAgent = () => {
+// ✅ 1. รับ props { onSendMessage } เข้ามา
+const LiveAgent = ({ onSendMessage }) => {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
-  // --- 1. เพิ่มฟังก์ชันขออนุญาตแจ้งเตือน ---
+  // --- ขออนุญาตแจ้งเตือน ---
   useEffect(() => {
     if (Notification.permission !== "granted") {
       Notification.requestPermission();
     }
   }, []);
 
-  // --- 2. ฟังก์ชันส่งแจ้งเตือน (System Notification) ---
+  // --- ส่งแจ้งเตือน (System Notification) ---
   const sendSystemNotification = (data) => {
-    // เช็คว่า User อนุญาตไหม และหน้าเว็บถูกพับอยู่หรือเปล่า (document.hidden)
     if (Notification.permission === "granted" && document.hidden) {
       new Notification(`🎵 Now Playing: ${data.name}`, {
-        body: `AI: "${data.notification}"`, // ข้อความจาก AI
-        icon: data.cover, // รูปปกเพลง
-        silent: false // ให้มีเสียงเตือน default ของวินโดวส์
+        body: `AI: "${data.notification}"`,
+        icon: data.cover,
+        silent: false
       });
     }
   };
@@ -58,8 +58,6 @@ const LiveAgent = () => {
             console.log("🎵 New song detected:", data.name);
             setStatus(data);
             setIsVisible(true);
-            
-            // --- 3. เรียกใช้ฟังก์ชันแจ้งเตือนตรงนี้ ---
             sendSystemNotification(data); 
 
           } else if (!data.is_playing) {
@@ -77,8 +75,7 @@ const LiveAgent = () => {
     return () => clearInterval(intervalId);
   }, [status]);
 
-  // ... (ส่วน useEffect Auto-Close และ handleArrangePlaylist เหมือนเดิม) ...
-  // ... (ส่วน useEffect Auto-Close เหมือนเดิม) ...
+  // Auto-Close logic
   useEffect(() => {
     if (isVisible && !loading && !isHovered) {
       const timer = setTimeout(() => {
@@ -95,16 +92,15 @@ const LiveAgent = () => {
     const prompt = `ช่วยจัด Playlist ต่อเนื่องจากเพลง "${status.name}" ของ "${status.artist}" ให้หน่อย เอาแนว "${status.mood_data ? Object.keys(status.mood_data)[0] : 'คล้ายๆ กัน'}"`;
     
     try {
-        const headers = getHeaders(); 
-        await fetch('http://localhost:8000/chat', {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify({ message: prompt })
-        });
-        alert("AI กำลังจัด Playlist ให้ครับ! (ดูผลลัพธ์ในหน้า Chat)");
+        // ✅ 2. ใช้ onSendMessage แทน fetch
+        // ส่ง intent เป็น 'get_recommendations' เพื่อความแม่นยำ
+        await onSendMessage(prompt, 'get_recommendations');
+        
+        // ไม่ต้อง alert แล้ว เพราะผลลัพธ์จะไปโผล่ใน Chat
         setLoading(false);
         setIsVisible(false);
     } catch (e) {
+        console.error("Error sending message:", e);
         alert("เกิดข้อผิดพลาดในการสั่งงาน AI");
         setLoading(false);
     }
@@ -113,7 +109,6 @@ const LiveAgent = () => {
   if (!status || !status.is_playing || !isVisible) return null;
 
   return (
-     // ... (ส่วน JSX แสดงผลหน้าเว็บ เหมือนเดิมทุกประการ) ...
     <div 
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -163,7 +158,7 @@ const LiveAgent = () => {
           cursor: loading ? 'not-allowed' : 'pointer', transition: 'transform 0.1s',
           fontSize: '13px'
       }}>
-        {loading ? 'Thinking...' : '✨ Create this Playlist!'}
+        {loading ? 'Sending to Chat...' : '✨ Create this Playlist!'}
       </button>
     </div>
   );
