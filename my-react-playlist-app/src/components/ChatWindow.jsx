@@ -51,18 +51,12 @@ function ChatWindow({
             onShowDetails={onShowDetails}
             onPin={onPin}
             onSummarize={onSummarize}
+            // ✅ UPDATE: Pass create playlist function to message component
+            onCreatePlaylist={onCreatePlaylist}
           />
         ))}
         <div ref={chatEndRef} />
       </div>
-
-      {currentRecommendedSongs.length > 0 && (
-        <div className="p-4 pt-0 text-center">
-          <button onClick={onCreatePlaylist} className="bg-gradient-to-r from-green-500 to-blue-500 text-white font-semibold py-2 px-6 rounded-full hover:opacity-90 transition-opacity">
-            <i className="fas fa-plus mr-2"></i> สร้าง Playlist นี้ใน Spotify
-          </button>
-        </div>
-      )}
 
       {chatHistory.length <= 1 && (
         <SuggestedPrompts 

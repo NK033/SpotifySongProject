@@ -158,9 +158,14 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  const handleCreatePlaylist = async () => {
-    if (currentRecommendedSongs.length === 0) return;
-    const trackUris = currentRecommendedSongs.map(song => song.uri);
+  // ✅ UPDATE: รับ parameter songs (ถ้ามี) ถ้าไม่มีให้ใช้ currentRecommendedSongs (Fallback)
+  const handleCreatePlaylist = async (songs = []) => {
+    // ใช้ songs ที่ส่งมา ถ้าไม่มีให้ใช้ค่า Global (currentRecommendedSongs)
+    const targetSongs = (Array.isArray(songs) && songs.length > 0) ? songs : currentRecommendedSongs;
+
+    if (!targetSongs || targetSongs.length === 0) return;
+    
+    const trackUris = targetSongs.map(song => song.uri);
     setIsFetching(true);
     try {
       await createPlaylistAPI("AI Recommended Playlist", trackUris);

@@ -1,8 +1,8 @@
+// src/components/ChatMessage.jsx
 import React from 'react';
 import SongCard from './SongCard';
 
-// (*** แก้ไข ***) เพิ่ม props `onSummarize` และ `item` เข้ามา
-function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize }) {
+function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize, onCreatePlaylist }) {
   const { isUser, message, songs, recommendationText } = item;
 
   return (
@@ -17,9 +17,33 @@ function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize }) {
               : 'bg-[var(--chat-bubble-ai)] rounded-tl-none'
           } p-4 rounded-xl max-w-xl shadow`}
         >
+          {/* 1. ส่วนข้อความ */}
           <p className="text-sm whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: message }}></p>
+          
+          {/* 2. ✅ MOVED: ย้ายปุ่ม Action มาไว้ตรงนี้ (ใต้ข้อความ - บนเพลง) */}
+          {songs && songs.length > 0 && !isUser && (
+            <div className="mt-3 mb-3 pb-3 border-b border-gray-500 border-opacity-50 flex flex-wrap gap-2">
+              {/* ปุ่ม Pin */}
+              <button 
+                onClick={() => onPin(songs, recommendationText)} 
+                className="pin-playlist-btn text-xs py-1 px-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition flex items-center"
+              >
+                <i className="fas fa-thumbtack mr-1"></i> Pin
+              </button>
+
+              {/* ปุ่ม Create on Spotify */}
+              <button 
+                onClick={() => onCreatePlaylist(songs)} 
+                className="create-playlist-btn text-xs py-1 px-3 rounded-full bg-green-600 hover:bg-green-700 text-white transition flex items-center"
+              >
+                <i className="fab fa-spotify mr-1"></i> Create on Spotify
+              </button>
+            </div>
+          )}
+
+          {/* 3. ส่วนรายการเพลง */}
           {songs && (
-            <div className="mt-4">
+            <div className="mt-2"> {/* ปรับ margin-top ให้น้อยลงนิดหน่อยเพราะมีเส้นคั่นด้านบนแล้ว */}
               {songs.map((song, sIndex) => (
                 <SongCard
                   key={sIndex}
@@ -30,18 +54,7 @@ function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize }) {
               ))}
             </div>
           )}
-
-          {/* (*** แก้ไข ***) เพิ่มปุ่ม "สรุป" (Summarize) ข้างๆ ปุ่ม Pin */}
-          {songs && songs.length > 0 && !isUser && (
-            <div className="mt-3 pt-3 border-t border-gray-500 border-opacity-50 flex space-x-2">
-              <button 
-                onClick={() => onPin(songs, recommendationText)} 
-                className="pin-playlist-btn text-xs py-1 px-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition"
-              >
-                <i className="fas fa-thumbtack mr-1"></i> Pin Playlist
-              </button>
-            </div>
-          )}
+          
         </div>
       </div>
     </div>
