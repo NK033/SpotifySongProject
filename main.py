@@ -240,14 +240,14 @@ async def chat_endpoint(
 
     try:
         user_message = chat_request.message
+        logging.info(f"📩 Chat Endpoint Received: '{user_message}'")
         
-        # --- (ส่วน Intent Classification - แปลงเป็น Groq) ---
+        # --- Intent Classification ---
         intent = ""
         if chat_request.intent:
             intent = chat_request.intent.strip().casefold()
-            logging.info(f"User Intent (from Frontend): '{intent}'")
+            logging.info(f"🎯 Intent (from Frontend): '{intent}'")
         else:
-            # ใช้ Groq วิเคราะห์ Intent (แทน gemini-3-pro-preview)
             intent_prompt = f"""Analyze the user's request. What is the user's primary intent?
             Choose ONE of the following options:
             1. "get_recommendations": For PERSONALIZED suggestions based on the user's taste.
@@ -257,7 +257,6 @@ async def chat_endpoint(
             User's request: "{user_message}" 
             Reply ONLY with the number (1, 2, 3, or 4)."""
             
-            # ใช้ FAST_MODEL เพื่อความรวดเร็วในการเช็ค
             intent_completion = await groq_client.chat.completions.create(
                 model=FAST_MODEL,
                 messages=[{"role": "user", "content": intent_prompt}],
@@ -265,50 +264,36 @@ async def chat_endpoint(
                 temperature=0.0
             )
             intent_text = intent_completion.choices[0].message.content.strip()
-            logging.info(f"User Intent (Classified by AI): '{intent_text}'")
+            logging.info(f"🤖 Intent (Classified by AI): '{intent_text}'")
 
-            intent_map = {
-                "1": "get_recommendations",
-                "2": "get_top_charts",
-                "3": "use_a_tool",
-                "4": "chat"
-            }
-            # พยายามแมพตัวเลข ถ้าแมพไม่ได้ให้ลองดู string
+            intent_map = {"1": "get_recommendations", "2": "get_top_charts", "3": "use_a_tool", "4": "chat"}
             if intent_text in intent_map:
                 intent = intent_map[intent_text]
             else:
-                # Fallback matching
                 if "recommend" in intent_text.lower(): intent = "get_recommendations"
                 elif "chart" in intent_text.lower(): intent = "get_top_charts"
                 elif "tool" in intent_text.lower(): intent = "use_a_tool"
                 else: intent = "chat"
                 
-            logging.info(f"AI Translated intent to: '{intent}'")
-        # --- (จบ Intent Classification) ---
-        
-
-        # --- (Path 1: Get Recommendations - คง Logic เดิม เปลี่ยนแค่ตัววิเคราะห์) ---
-        # --- (Path 1: Get Recommendations) ---
+        # --- Path 1: Get Recommendations ---
         if "get_recommendations" in intent:
+            logging.info("🚀 Starting Recommendation Flow...")
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
             
             user_profile = await get_user_profile(sp_client)
             user_id = user_profile.get('id')
 
-            IS_SYSTEM_BUSY = True
+            IS_SYSTEM_BUSY = True # <--- Set BUSY
             try:
-                # --- 1. Auth Check (Wrapped in its own internal try/except) ---
                 try:
-                    # Only try this if the client actually has an auth manager
                     if hasattr(sp_client, "auth_manager") and sp_client.auth_manager:
                         token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
                         background_tasks.add_task(update_user_profile_background, token_info_for_bg, user_id)
                 except Exception as e:
                     logging.warning(f"Skipping background profile update in chat: {e}")
 
-                # --- 2. Main Logic (แก้ไขแล้ว: ขยับออกมาด้านซ้าย ไม่ให้อยู่ใน except) ---
-                logging.info("Executing intelligent recommendation path (V7 - Generic Bypass).") 
+                logging.info(f"👤 User: {user_id}. Executing intelligent recommender...") 
                 
                 historical_profile = await get_user_mood_profile(user_id)
                 if not historical_profile:
@@ -318,7 +303,7 @@ async def chat_endpoint(
                     if not historical_profile:
                         return ChatResponse(response="ขออภัยค่ะ ฉันยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อยนะคะ")
 
-                # --- ตรรกะ "Bypass" (ใช้ Groq แทน) ---
+                # Analyze Emotion
                 generic_prompts = ["🎵 แนะนำเพลงส่วนตัวให้หน่อย", "แนะนำเพลง", "เพลงแนะนำ", "ขอเพลงหน่อย", "หาเพลง"]
                 emotional_profile = {} 
                 
@@ -326,10 +311,10 @@ async def chat_endpoint(
                     logging.info(f"Generic request detected. Using PURE User Taste Profile.")
                 else:
                     logging.info(f"Specific request detected. Analyzing request emotion...")
-                    # ✅ ใช้ Groq วิเคราะห์อารมณ์แทน
                     emotional_profile = await get_emotional_profile_from_groq(user_message)
                 
-                # --- เรียก Recommender ---
+                # --- CALL RECOMMENDER ---
+                logging.info("Calling get_intelligent_recommendations...")
                 recommended_songs = await get_intelligent_recommendations(
                     sp_client, user_id, 
                     historical_profile, 
@@ -338,9 +323,12 @@ async def chat_endpoint(
                 )
 
                 if not recommended_songs:
-                    return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้")
+                    logging.error("❌ Recommender returned EMPTY list!")
+                    return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้ (AI คืนค่าว่าง)")
+                
+                logging.info(f"✅ Recommender returned {len(recommended_songs)} songs.")
 
-                # --- Presentation (ใช้ Groq เขียนคำโปรย) ---
+                # Presentation
                 song_titles = ", ".join([f"'{s['name']}'" for s in recommended_songs])
                 presentation_prompt = f"""
                 As an AI Musicologist, present this playlist based on request: "{user_message}"
@@ -358,22 +346,24 @@ async def chat_endpoint(
                 )
                 return ChatResponse(response=final_response.choices[0].message.content, songs_found=recommended_songs)
             
+            except Exception as e:
+                logging.error(f"❌ Critical Error in Recommendation Path: {e}", exc_info=True)
+                return ChatResponse(response="เกิดข้อผิดพลาดในการประมวลผลคำแนะนำเพลงค่ะ โปรดลองใหม่อีกครั้ง")
+            
             finally:
-                IS_SYSTEM_BUSY = False
+                logging.info("🏁 Recommendation Flow Finished. Releasing Busy State.")
+                IS_SYSTEM_BUSY = False # <--- Release BUSY
         
 
-        # --- (Path 2: Top Charts - คง Logic เดิม เปลี่ยนแค่ Presentation) ---
+        # --- Path 2: Top Charts ---
         elif "get_top_charts" in intent:
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะดูชาร์ตได้ 😊")
             logging.info("Executing top charts path.")
             
-            # (Logic เดิมของคุณ)
             user_profile = await get_user_profile(sp_client)
             user_country = user_profile.get("country", "US")
             
-            # ต้องมั่นใจว่า function นี้มีอยู่ (ถ้าไม่มีในไฟล์นี้ ต้อง import มา)
-            # จากบริบทไฟล์เก่าคุณน่าจะมี function นี้อยู่แล้ว
             chart_tracks_info = await get_chart_top_tracks(user_country) 
             
             if not chart_tracks_info:
@@ -386,7 +376,6 @@ async def chat_endpoint(
                 if spotify_results:
                     chart_songs_on_spotify.append(spotify_results[0])
             
-            # ✅ ใช้ Groq เขียนคำโปรย
             songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in chart_songs_on_spotify])
             presentation_prompt = f"นำเสนอรายการเพลงฮิตติดชาร์ตเหล่านี้ในภาษาที่เป็นกันเองและน่าสนใจ (ตอบเป็นภาษาไทย):\n\n{songs_for_prompt}"
             
@@ -397,16 +386,15 @@ async def chat_endpoint(
             return ChatResponse(response=final_response.choices[0].message.content, songs_found=chart_songs_on_spotify)
 
 
-        # --- (Path 3: Tool Usage - คง Logic เดิม แต่เปลี่ยนวิธีเรียก Tool) ---
+        # --- Path 3: Tool Usage ---
         elif "use_a_tool" in intent:
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะใช้เครื่องมือนี้ได้ค่ะ")
                 
             logging.info("Executing tool usage path (Groq Version).")
             
-            # ✅ ใช้ Groq พร้อม Tools (ดึง GROQ_TOOLS ที่ import มา)
             tool_completion = await groq_client.chat.completions.create(
-                model=SMART_MODEL, # ใช้ตัวฉลาดสำหรับเรียก Tool
+                model=SMART_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant. Use the available tools to help the user."},
                     {"role": "user", "content": user_message}
@@ -438,11 +426,10 @@ async def chat_endpoint(
                 logging.warning(f"AI failed to call a tool for: '{user_message}'. Falling back to chat.")
                 intent = "chat"
         
-        # --- (Path 4: Chat - เหมือนเดิม) ---
+        # --- Path 4: Chat ---
         if "chat" in intent:
             logging.info("Executing general chat path.")
             
-            # ✅ ใช้ Groq คุยเล่น
             chat_completion = await groq_client.chat.completions.create(
                 model=FAST_MODEL,
                 messages=[

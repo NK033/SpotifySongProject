@@ -1,9 +1,7 @@
 // src/api.js
-// (คัดลอกทั้งไฟล์ไปวางทับ หรือเพิ่มเฉพาะฟังก์ชันใหม่ก็ได้ครับ)
 
 /**
  * A helper function to get the authentication headers from local storage.
- * Throws an error if the user is not logged in.
  */
 const getAuthHeaders = () => {
   const accessToken = localStorage.getItem('spotify_access_token');
@@ -20,12 +18,9 @@ const getAuthHeaders = () => {
 
 /**
  * Sends a chat message to the backend.
- * Can be called as a logged-in user or a guest.
- * @param {string} message - The user's message.
- * @param {string | null} intent - (*** แก้ไข: เพิ่มพารามิเตอร์ intent ***)
- * @returns {Promise<object>} - The JSON response from the server.
+ * (จับคู่กับ sendMessageToChatbot ใน AppContext)
  */
-export const postChatMessage = async (message, intent = null) => {
+export const sendMessageToChatbot = async (message, intent = null) => {
   let headers = { 'Content-Type': 'application/json' };
   try {
     headers = { ...headers, ...getAuthHeaders() };
@@ -36,7 +31,6 @@ export const postChatMessage = async (message, intent = null) => {
   const response = await fetch('/chat', {
     method: 'POST',
     headers: headers,
-    // (*** แก้ไข: เพิ่ม intent เข้าไปใน body ***)
     body: JSON.stringify({ message, intent })
   });
 
@@ -46,10 +40,11 @@ export const postChatMessage = async (message, intent = null) => {
   }
   return response.json();
 };
+// Alias ไว้เผื่อที่อื่นเรียกใช้ชื่อเดิม
+export const postChatMessage = sendMessageToChatbot;
 
 /**
- * Fetches the current user's Spotify profile from the backend.
- * @returns {Promise<object>} - The user profile JSON.
+ * Fetches the current user's Spotify profile.
  */
 export const fetchUserProfile = async () => {
     const headers = getAuthHeaders();
@@ -61,10 +56,10 @@ export const fetchUserProfile = async () => {
 };
 
 /**
- * Fetches all pinned playlists for the current user.
- * @returns {Promise<Array>} - A list of pinned playlists.
+ * Fetches pinned playlists.
+ * (จับคู่กับ getPinnedPlaylistsAPI ใน AppContext)
  */
-export const fetchPinnedPlaylists = async () => {
+export const getPinnedPlaylistsAPI = async () => {
   const headers = getAuthHeaders();
   const response = await fetch('/pinned_playlists', { headers });
   if (!response.ok) {
@@ -72,14 +67,14 @@ export const fetchPinnedPlaylists = async () => {
   }
   return response.json();
 };
+// Alias
+export const fetchPinnedPlaylists = getPinnedPlaylistsAPI;
 
 /**
- * Sends a request to pin a new playlist.
- * @param {string} playlistName - The name for the new playlist.
- * @param {Array} songs - The list of simplified song objects.
- * @param {string} recommendationText - The AI's recommendation text.
+ * Pins a new playlist.
+ * (จับคู่กับ pinPlaylistAPI ใน AppContext)
  */
-export const pinPlaylist = async (playlistName, songs, recommendationText) => {
+export const pinPlaylistAPI = async (playlistName, songs, recommendationText) => {
     const simplifiedSongs = songs.map(song => ({
         uri: song.uri, name: song.name, artists: song.artists.map(a => ({ name: a.name })),
         album: { images: song.album.images }, external_urls: { spotify: song.external_urls.spotify }
@@ -98,26 +93,28 @@ export const pinPlaylist = async (playlistName, songs, recommendationText) => {
         throw new Error('Failed to pin playlist');
     }
 };
+// Alias
+export const pinPlaylist = pinPlaylistAPI;
 
 /**
- * Sends feedback (like/dislike) for a track.
- * @param {string} trackUri - The Spotify URI of the track.
- * @param {string} feedback - The feedback, either 'like' or 'dislike'.
+ * Sends feedback (like/dislike).
+ * (จับคู่กับ sendFeedbackAPI ใน AppContext)
  */
-export const sendFeedback = async (trackUri, feedback) => {
+export const sendFeedbackAPI = async (trackUri, feedback) => {
     await fetch('/feedback', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ track_uri: trackUri, feedback: feedback })
     });
 };
+// Alias
+export const sendFeedback = sendFeedbackAPI;
 
 /**
- * Fetches the detailed AI analysis for a specific song.
- * @param {string} songUri - The Spotify URI of the song.
- * @returns {Promise<object>} - The analysis data.
+ * Fetches song details.
+ * (จับคู่กับ getSongDetailsAPI ใน AppContext)
  */
-export const fetchSongDetails = async (songUri) => {
+export const getSongDetailsAPI = async (songUri) => {
     const response = await fetch(`/song_details/${encodeURIComponent(songUri)}`, { 
         headers: getAuthHeaders() 
     });
@@ -126,14 +123,14 @@ export const fetchSongDetails = async (songUri) => {
     }
     return response.json();
 };
+// Alias
+export const fetchSongDetails = getSongDetailsAPI;
 
 /**
- * Sends a request to create a playlist in the user's Spotify account.
- * @param {string} playlistName - The desired name of the playlist.
- * @param {Array<string>} trackUris - A list of Spotify track URIs.
- * @returns {Promise<object>} - Information about the created playlist.
+ * Creates a Spotify playlist.
+ * (จับคู่กับ createPlaylistAPI ใน AppContext)
  */
-export const createSpotifyPlaylist = async (playlistName, trackUris) => {
+export const createPlaylistAPI = async (playlistName, trackUris) => {
     const response = await fetch('/create_playlist', {
         method: 'POST',
         headers: getAuthHeaders(),
@@ -144,12 +141,14 @@ export const createSpotifyPlaylist = async (playlistName, trackUris) => {
     }
     return response.json();
 };
+// Alias
+export const createSpotifyPlaylist = createPlaylistAPI;
 
 /**
- * Sends a request to delete a pinned playlist.
- * @param {number} pinId - The ID of the pinned playlist.
+ * Deletes a pinned playlist.
+ * (จับคู่กับ deletePinnedPlaylistAPI ใน AppContext)
  */
-export const deletePinnedPlaylist = async (pinId) => {
+export const deletePinnedPlaylistAPI = async (pinId) => {
   const response = await fetch(`/pinned_playlists/${pinId}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
@@ -159,20 +158,20 @@ export const deletePinnedPlaylist = async (pinId) => {
   }
   return { success: true };
 };
+// Alias
+export const deletePinnedPlaylist = deletePinnedPlaylistAPI;
 
 /**
- * Sends a request to update a pinned playlist's name.
- * @param {number} pinId - The ID of the pinned playlist.
- * @param {string} newName - The new name for the playlist.
- * @param {Array} songs - The *original* list of songs (needed by the backend).
+ * Updates a pinned playlist.
+ * (จับคู่กับ updatePinnedPlaylistAPI ใน AppContext)
  */
-export const updatePinnedPlaylist = async (pinId, newName, songs) => {
+export const updatePinnedPlaylistAPI = async (pinId, newName, songs) => {
   const response = await fetch(`/pinned_playlists/${pinId}`, {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify({
       playlist_name: newName,
-      songs: songs // Send the original songs list back
+      songs: songs 
     })
   });
   if (!response.ok) {
@@ -180,13 +179,14 @@ export const updatePinnedPlaylist = async (pinId, newName, songs) => {
   }
   return { success: true };
 };
+// Alias
+export const updatePinnedPlaylist = updatePinnedPlaylistAPI;
 
 /**
- * Fetches an AI summary for a list of song URIs.
- * @param {Array<string>} songUris - A list of Spotify track URIs.
- * @returns {Promise<object>} - The summary data.
+ * Summarizes a playlist.
+ * (จับคู่กับ summarizePlaylistAPI ใน AppContext)
  */
-export const summarizePlaylist = async (songUris) => {
+export const summarizePlaylistAPI = async (songUris) => {
   const response = await fetch('/summarize_playlist', {
     method: 'POST',
     headers: getAuthHeaders(),
@@ -195,15 +195,16 @@ export const summarizePlaylist = async (songUris) => {
   if (!response.ok) {
     throw new Error('Failed to summarize playlist');
   }
-  return response.json(); // ควรจะคืนค่า { "summary": "..." }
+  return response.json(); 
 };
+// Alias
+export const summarizePlaylist = summarizePlaylistAPI;
 
-// --- (*** ใหม่ ***) ---
 /**
- * Fetches dynamic suggested prompts based on user's taste.
- * @returns {Promise<object>} - An object { prompts: [...] }
+ * Fetches dynamic suggested prompts.
+ * (จับคู่กับ getSuggestedPromptsAPI ใน AppContext)
  */
-export const fetchSuggestedPrompts = async () => {
+export const getSuggestedPromptsAPI = async () => {
   try {
     const headers = getAuthHeaders();
     const response = await fetch('/suggested_prompts', { headers });
@@ -212,8 +213,9 @@ export const fetchSuggestedPrompts = async () => {
     }
     return response.json();
   } catch (error) {
-    // ถ้า fetch ไม่ได้ (เช่น 401) ให้คืนค่า default
     console.warn("Could not fetch dynamic prompts, using default.", error.message);
     return { prompts: [ '🎵 แนะนำเพลงส่วนตัวให้หน่อย', '📈 ขอเพลงฮิตติดชาร์ต', '🎧 หาเพลงเศร้าๆ' ] };
   }
 };
+// Alias
+export const fetchSuggestedPrompts = getSuggestedPromptsAPI;

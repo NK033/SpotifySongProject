@@ -18,15 +18,26 @@ const AppContext = createContext();
 export const AppProvider = ({ children }) => {
   // --- States ---
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [chatHistory, setChatHistory] = useState([
-    { 
-      id: 1, 
-      isUser: false, 
-      message: "สวัสดีครับ! ผมคือ AI Music Assistant 🎵\nอยากให้ช่วยแนะนำเพลงแบบไหน หรือจัด Playlist อารมณ์ไหน บอกผมได้เลยครับ!" 
+  
+  // ✅ FIX 1: Load from LocalStorage (Auto-Restore)
+  const [chatHistory, setChatHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chat_history');
+      return saved ? JSON.parse(saved) : [
+        { 
+          id: 'welcome-msg', 
+          isUser: false, 
+          message: "สวัสดีครับ! ผมคือ AI Music Assistant 🎵\nอยากให้ช่วยแนะนำเพลงแบบไหน หรือจัด Playlist อารมณ์ไหน บอกผมได้เลยครับ!" 
+        }
+      ];
+    } catch (e) {
+      console.error("Error parsing chat history", e);
+      return [];
     }
-  ]);
+  });
+
   const [userInput, setUserInput] = useState('');
-  const [isFetching, setIsFetching] = useState(false); // ควบคุม Loading Overlay
+  const [isFetching, setIsFetching] = useState(false);
   const [currentTheme, setCurrentTheme] = useState('dark');
   const [currentRecommendedSongs, setCurrentRecommendedSongs] = useState([]);
   const [userInfo, setUserInfo] = useState(null);
@@ -52,6 +63,11 @@ export const AppProvider = ({ children }) => {
       fetchSuggestedPrompts();
     }
   }, []);
+
+  // ✅ FIX 2: Auto-Save to LocalStorage whenever chat changes
+  useEffect(() => {
+    localStorage.setItem('chat_history', JSON.stringify(chatHistory));
+  }, [chatHistory]);
 
   // --- Actions ---
   const handleFetchUserProfile = async () => {
@@ -84,52 +100,56 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅✅✅ แก้ไขฟังก์ชันนี้ (หัวใจสำคัญ) ✅✅✅
-  // รองรับ messageOverride และ intentOverride เพื่อให้ LiveAgent สั่งงานได้
+  // ✅ FIX 3: Robust Send Message Function
   const sendMessageToBackend = async (messageOverride = null, intentOverride = null) => {
-    
-    // 1. ตัดสินใจว่าจะใช้ข้อความจากไหน (จาก LiveAgent หรือจากช่องพิมพ์ปกติ)
     const messageToSend = messageOverride || userInput;
     
     if (!messageToSend.trim()) return;
 
-    // 2. เคลียร์ช่องพิมพ์ (ถ้าเป็นการพิมพ์ปกติ)
     if (!messageOverride) {
         setUserInput('');
     }
 
-    // 3. เพิ่มข้อความ User ลงใน Chat History ทันที (เพื่อให้เห็นว่าสั่งแล้ว)
-    const newUserMsg = { id: Date.now(), isUser: true, message: messageToSend };
+    // ✅ Generate Unique ID for User Message
+    const userMsgId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const newUserMsg = { id: userMsgId, isUser: true, message: messageToSend };
+    
     setChatHistory(prev => [...prev, newUserMsg]);
-
-    // 4. เปิด Loading Overlay (เพื่อให้รู้ว่ากำลังทำงาน)
     setIsFetching(true); 
 
     try {
-      // 5. ส่งไป Backend
+      console.log(`🚀 Sending: "${messageToSend}" (Intent: ${intentOverride})`);
       const data = await sendMessageToChatbot(messageToSend, intentOverride);
+      console.log("✅ Response:", data);
+
+      // ✅ Generate Unique ID for AI Message
+      const aiMsgId = `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
-      // 6. เพิ่มคำตอบ AI ลง Chat History
+      // ✅ Fallback text if response is empty
+      const responseText = data.response || "จัดให้ตามคำขอครับ! (AI ไม่ได้ส่งข้อความตอบกลับ)";
+
       const newAiMsg = { 
-        id: Date.now() + 1, 
+        id: aiMsgId, 
         isUser: false, 
-        message: data.response, 
+        message: responseText, 
         songs: data.songs_found || [],
-        recommendationText: data.response 
+        recommendationText: responseText 
       };
       setChatHistory(prev => [...prev, newAiMsg]);
 
-      // 7. อัปเดตเพลงแนะนำล่าสุด (ถ้ามี)
       if (data.songs_found && data.songs_found.length > 0) {
         setCurrentRecommendedSongs(data.songs_found);
       }
 
     } catch (error) {
       console.error("Error sending message:", error);
-      const errorMsg = { id: Date.now() + 2, isUser: false, message: "ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์" };
+      const errorMsg = { 
+          id: `err-${Date.now()}`, 
+          isUser: false, 
+          message: "ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์" 
+      };
       setChatHistory(prev => [...prev, errorMsg]);
     } finally {
-      // 8. ปิด Loading Overlay
       setIsFetching(false);
     }
   };
@@ -166,7 +186,6 @@ export const AppProvider = ({ children }) => {
   const handleFeedback = async (uri, feedback) => {
     try {
       await sendFeedbackAPI(uri, feedback);
-      console.log(`Feedback sent for ${uri}: ${feedback}`);
     } catch (error) {
       console.error("Failed to send feedback", error);
     }
@@ -189,7 +208,7 @@ export const AppProvider = ({ children }) => {
 
   const displayPlaylistFromHistory = (playlist) => {
     const aiMsg = {
-      id: Date.now(),
+      id: `history-${Date.now()}`,
       isUser: false,
       message: `นี่คือ Playlist ที่คุณปักหมุดไว้: **${playlist.name}**\n${playlist.recommendation_text || ''}`,
       songs: playlist.songs,
@@ -257,7 +276,7 @@ export const AppProvider = ({ children }) => {
         const songUris = songs.map(s => s.uri);
         const data = await summarizePlaylistAPI(songUris);
         const summaryMsg = {
-            id: Date.now(),
+            id: `summary-${Date.now()}`,
             isUser: false,
             message: `📊 **สรุปภาพรวม Playlist:**\n\n${data.summary}`
         };
@@ -289,12 +308,12 @@ export const AppProvider = ({ children }) => {
       sidebarOpen, setSidebarOpen,
       chatHistory, setChatHistory,
       userInput, setUserInput,
-      isFetching, setIsFetching, // ส่งตัวนี้ออกไป
+      isFetching, setIsFetching,
       currentTheme, setCurrentTheme,
       currentRecommendedSongs,
       userInfo,
       pinnedPlaylists,
-      sendMessageToBackend, // ✅ ฟังก์ชันที่แก้แล้ว
+      sendMessageToBackend,
       handleCreatePlaylist,
       handleSpotifyLogin,
       handleSpotifyLogout,

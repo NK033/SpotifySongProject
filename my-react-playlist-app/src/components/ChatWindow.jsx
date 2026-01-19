@@ -1,3 +1,4 @@
+// src/components/ChatWindow.jsx
 import React, { useRef, useEffect } from 'react';
 import ChatMessage from './ChatMessage';
 import SuggestedPrompts from './SuggestedPrompts'; 
@@ -13,19 +14,22 @@ function ChatWindow({
   onCreatePlaylist,
   userInput,
   onUserInputChange,
-  onSendMessage, // นี่คือฟังก์ชัน sendMessageToBackend (ที่รับ message และ intent)
-  suggestedPrompts // <-- รับ Prompts แบบ Dynamic (ที่เป็น Object)
+  onSendMessage, 
+  suggestedPrompts 
 }) {
   const chatEndRef = useRef(null);
 
+  // ✅ FIX: Timeout ensures DOM is painted before scrolling
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const timeoutId = setTimeout(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, 100);
+    return () => clearTimeout(timeoutId);
   }, [chatHistory]);
 
-  // (*** แก้ไข: รับ promptObj และส่ง intent ไปด้วย ***)
   const handlePromptClick = (promptObj) => {
-    onUserInputChange({ target: { value: promptObj.prompt } }); // 1. ตั้งค่าในช่องพิมพ์ (เพื่อ UX)
-    onSendMessage(promptObj.prompt, promptObj.intent); // 2. ส่งข้อความและ "intent" ไปเลยทันที
+    onUserInputChange({ target: { value: promptObj.prompt } }); 
+    onSendMessage(promptObj.prompt, promptObj.intent); 
   };
 
   return (
@@ -41,7 +45,7 @@ function ChatWindow({
       <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-4">
         {chatHistory.map((item) => (
           <ChatMessage
-            key={item.id} // ใช้ ID ที่ unique
+            key={item.id} 
             item={item}
             onFeedback={onFeedback}
             onShowDetails={onShowDetails}
@@ -60,7 +64,6 @@ function ChatWindow({
         </div>
       )}
 
-      {/* (Component นี้จะอ่าน promptObj.prompt เอง) */}
       {chatHistory.length <= 1 && (
         <SuggestedPrompts 
           prompts={suggestedPrompts} 
@@ -74,13 +77,11 @@ function ChatWindow({
             type="text"
             value={userInput}
             onChange={onUserInputChange}
-            // (*** แก้ไข: ส่ง (userInput, null) เมื่อผู้ใช้พิมพ์เอง ***)
             onKeyPress={(e) => e.key === 'Enter' && onSendMessage(userInput, null)} 
             placeholder="พิมพ์ข้อความของคุณ..."
             className="w-full p-4 pl-6 pr-16 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors duration-300 text-[var(--text-primary)]"
           />
           <button 
-            // (*** แก้ไข: ส่ง (userInput, null) เมื่อผู้ใช้พิมพ์เอง ***)
             onClick={() => onSendMessage(userInput, null)} 
             className="absolute right-2 text-white bg-gradient-to-r from-green-500 to-blue-500 rounded-full h-10 w-10 flex items-center justify-center hover:opacity-90 transition-opacity"
           >

@@ -2,21 +2,17 @@
 import React, { useState, useEffect } from 'react';
 import '../App.css'; 
 
-// ✅ 1. รับ props { onSendMessage } เข้ามา
 const LiveAgent = ({ onSendMessage }) => {
   const [status, setStatus] = useState(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
-  // หมายเหตุ: ไม่ต้องใช้ state loading ในนี้แล้ว เพราะจะใช้ Global Loading แทน
 
-  // --- 1. ขออนุญาตแจ้งเตือน ---
   useEffect(() => {
     if (Notification.permission !== "granted") {
       Notification.requestPermission();
     }
   }, []);
 
-  // --- 2. ฟังก์ชันส่งแจ้งเตือน (System Notification) ---
   const sendSystemNotification = (data) => {
     if (Notification.permission === "granted" && document.hidden) {
       new Notification(`🎵 Now Playing: ${data.name}`, {
@@ -56,14 +52,14 @@ const LiveAgent = ({ onSendMessage }) => {
           const data = await response.json();
           
           if (data.is_playing && data.name !== status?.name) {
-            console.log("🎵 New song detected:", data.name);
+            console.log("🎵 LiveAgent: New song detected:", data.name);
             setStatus(data);
             setIsVisible(true);
-            
-            // เรียกใช้ฟังก์ชันแจ้งเตือนตรงนี้
             sendSystemNotification(data); 
 
           } else if (!data.is_playing) {
+            // Log when agent hides to see if it's due to 'System Busy'
+            if (isVisible) console.log("🎵 LiveAgent: Hiding (Server says not playing or busy)");
             setStatus(null);
             setIsVisible(false);
           }
@@ -74,11 +70,10 @@ const LiveAgent = ({ onSendMessage }) => {
     };
 
     checkLiveStatus();
-    const intervalId = setInterval(checkLiveStatus, 30000); 
+    const intervalId = setInterval(checkLiveStatus, 5000); // 5 seconds polling
     return () => clearInterval(intervalId);
-  }, [status]);
+  }, [status, isVisible]);
 
-  // Auto-Close
   useEffect(() => {
     if (isVisible && !isHovered) {
       const timer = setTimeout(() => {
@@ -88,23 +83,20 @@ const LiveAgent = ({ onSendMessage }) => {
     }
   }, [isVisible, isHovered, status]);
 
-  // ✅ 3. แก้ไขฟังก์ชันนี้ (หัวใจสำคัญ)
   const handleArrangePlaylist = async () => {
     if (!status) return;
     
+    console.log("✨ LiveAgent: User clicked 'Create Playlist'");
+    
     const prompt = `ช่วยจัด Playlist ต่อเนื่องจากเพลง "${status.name}" ของ "${status.artist}" ให้หน่อย เอาแนว "${status.mood_data ? Object.keys(status.mood_data)[0] : 'คล้ายๆ กัน'}"`;
     
+    console.log("📨 LiveAgent: Sending prompt:", prompt);
+    
     try {
-        // ✅ เรียกใช้ onSendMessage ที่ส่งมาจาก App.jsx
-        // ส่ง prompt และระบุ intent ชัดเจน
         onSendMessage(prompt, 'get_recommendations');
-        
-        // ปิดหน้าต่าง Live Agent ทันที 
-        // (เพราะ Loading Overlay ของแอปหลักจะเด้งขึ้นมาแทน ทำให้รู้ว่าทำงานอยู่)
         setIsVisible(false);
-        
     } catch (e) {
-        console.error("Error sending message from LiveAgent:", e);
+        console.error("❌ LiveAgent Error sending message:", e);
     }
   };
 
