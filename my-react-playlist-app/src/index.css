@@ -1,34 +1,35 @@
+@import "tailwindcss";
+
 /*
   my-react-playlist-app/src/index.css
-  (เวอร์ชันอัปเกรด กราฟิก)
 */
 
 body {
   font-family: 'Sarabun', sans-serif;
-  overflow: hidden; /* ป้องกันการ scroll หน้าหลัก */
+  overflow: hidden;
 }
 
 /* --- 🎨 ธีมหลัก (Glassmorphism Dark) --- */
 .dark-theme {
-  --bg-primary: #0d1117; /* พื้นหลังหลัก (เกือบดำ) */
+  --bg-primary: #0d1117; 
   --bg-secondary: rgba(26, 32, 44, 0.95); 
   --bg-glass: rgba(255, 255, 255, 0.05);
-  --text-primary: #e2e8f0; /* ตัวอักษรหลัก (ขาวนวล) */
-  --text-secondary: #a0aec0; /* ตัวอักษรรอง (เทา) */
-  --border-color: rgba(255, 255, 255, 0.1); /* เส้นขอบ (ขาว-โปร่งแสง) */
-  --chat-bubble-ai: #2d3748; /* สีช่องแชท AI */
-  --gradient-start: #1DB954; /* เขียว Spotify */
-  --gradient-end: #1a9cff; /* ฟ้าสดใส */
+  --text-primary: #e2e8f0; 
+  --text-secondary: #a0aec0; 
+  --border-color: rgba(255, 255, 255, 0.1); 
+  --chat-bubble-ai: #2d3748; 
+  --gradient-start: #1DB954; 
+  --gradient-end: #1a9cff; 
 }
 
 .light-theme {
-  --bg-primary: #f0f2f5; /* พื้นหลังหลัก (เทาอ่อน) */
+  --bg-primary: #f0f2f5; 
   --bg-secondary: rgba(255, 255, 255, 0.95); 
   --bg-glass: rgba(82, 80, 80, 0.247);
-  --text-primary: #1a202c; /* ตัวอักษรหลัก (ดำ) */
-  --text-secondary: #3a3b3d; /* ตัวอักษรรอง (เทาเข้ม) */
-  --border-color: rgba(0, 0, 0, 0.1); /* เส้นขอบ (ดำ-โปร่งแสง) */
-  --chat-bubble-ai: #e2e8f0; /* สีช่องแชท AI */
+  --text-primary: #1a202c; 
+  --text-secondary: #3a3b3d; 
+  --border-color: rgba(0, 0, 0, 0.1); 
+  --chat-bubble-ai: #e2e8f0; 
   --gradient-start: #1DB954;
   --gradient-end: #1a9cff;
 }
@@ -50,10 +51,10 @@ body {
 .suggested-prompt-btn {
   padding: 8px 16px;
   border: 1px solid var(--border-color);
-  border-radius: 9999px; /* rounded-full */
+  border-radius: 9999px;
   background-color: var(--bg-glass);
   color: var(--text-secondary);
-  font-size: 0.875rem; /* text-sm */
+  font-size: 0.875rem; 
   transition: all 0.2s ease-in-out;
 }
 .suggested-prompt-btn:hover {
@@ -68,7 +69,7 @@ body {
   color: white;
 }
 
-/* --- Animation (เหมือนเดิม) --- */
+/* --- Animation --- */
 .modal-overlay {
   transition: opacity 0.3s ease;
   animation: fadeIn 0.3s ease;

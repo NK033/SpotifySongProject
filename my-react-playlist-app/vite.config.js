@@ -1,13 +1,15 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite' // <--- บรรทัดนี้คือพระเอกที่หายไป!
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    tailwindcss(), // <--- เมื่อมีบรรทัดบนแล้ว บรรทัดนี้จะทำงานได้
+  ],
   server: {
     proxy: {
-      // This tells Vite to forward any API requests (like /chat, /me, etc.)
-      // to your FastAPI backend running on port 8000.
       '/chat': 'http://localhost:8000',
       '/spotify_login': 'http://localhost:8000',
       '/callback': 'http://localhost:8000',
