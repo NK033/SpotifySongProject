@@ -1,4 +1,3 @@
-// src/App.jsx
 import React from 'react';
 import { useAppContext } from './contexts/AppContext';
 import Sidebar from './components/Sidebar';
@@ -8,10 +7,11 @@ import SongDetailModal from './components/SongDetailModal';
 import RenameModal from './components/RenameModal';
 import ConfirmModal from './components/ConfirmModal';
 import LiveAgent from './components/LiveAgent';
+import PinModal from './components/PinModal'; // ✅ 1. Import มาใหม่
 
 function App() {
   const {
-    // Core
+    // ... (ค่าเดิม) ...
     sidebarOpen, setSidebarOpen,
     chatHistory,
     userInput, setUserInput,
@@ -20,22 +20,25 @@ function App() {
     currentRecommendedSongs,
     pinnedPlaylists,
     
-    // User
     userInfo,
     handleSpotifyLogin,
     handleSpotifyLogout,
     
-    // Actions
-    sendMessageToBackend, // ✅ ฟังก์ชันสำคัญที่เราต้องส่งไป
+    sendMessageToBackend,
     handleCreatePlaylist,
     handleShowDetails,
     handleFeedback,
     handlePinClick,
+    
+    // ✅ 2. ดึงค่าสำหรับ Pin Modal มาใช้
+    isPinModalOpen, 
+    setIsPinModalOpen,
+    handleSubmitPin,
+
     displayPlaylistFromHistory,
     handleSummarizePlaylist,
     suggestedPrompts,
     
-    // Modals
     handleDeletePinnedPlaylist,
     isRenameModalOpen,
     isSubmitting,
@@ -63,11 +66,12 @@ function App() {
         onLogout={handleSpotifyLogout}
         pinnedPlaylists={pinnedPlaylists}
         onSelectPinned={displayPlaylistFromHistory}
-        onDeletePinned={handleDeletePinnedPlaylist} 
-        onUpdatePinned={handleOpenRenameModal}     
+        onDeletePinned={handleDeletePinnedPlaylist}
+        onUpdatePinned={handleOpenRenameModal} // ตรวจสอบว่าตรงนี้เรียก handleOpenRenameModal
         currentTheme={currentTheme}
         onToggleTheme={handleToggleTheme}
       />
+      
       <ChatWindow
         chatHistory={chatHistory}
         onFeedback={handleFeedback}
@@ -92,11 +96,20 @@ function App() {
         isLoading={isSubmitting}
       />
       
+      {/* ✅ Rename Modal (ตรวจสอบว่ามีอยู่แล้ว) */}
       <RenameModal
         isOpen={isRenameModalOpen}
         currentName={playlistToRename?.name || ''}
         onClose={handleCloseRenameModal}
         onRename={handleSubmitRename}
+        isLoading={isSubmitting}
+      />
+
+      {/* ✅ NEW: Pin Modal (เพิ่มใหม่ตรงนี้) */}
+      <PinModal
+        isOpen={isPinModalOpen}
+        onClose={() => setIsPinModalOpen(false)}
+        onConfirm={handleSubmitPin}
         isLoading={isSubmitting}
       />
       
@@ -110,7 +123,6 @@ function App() {
         />
       )}
       
-      {/* ✅ แก้ไขตรงนี้: ส่ง props onSendMessage ลงไป */}
       <LiveAgent onSendMessage={sendMessageToBackend} />
     </div>
   );

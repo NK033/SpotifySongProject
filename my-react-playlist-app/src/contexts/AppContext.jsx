@@ -11,7 +11,7 @@ import {
   updatePinnedPlaylistAPI,
   summarizePlaylistAPI,
   getSuggestedPromptsAPI,
-  getPinnedPlaylistsAPI // ✅ เพิ่มตรงนี้: นำเข้ามาให้ครบ จะได้ไม่ต้องสร้าง Helper function
+  getPinnedPlaylistsAPI 
 } from '../api';
 
 const AppContext = createContext();
@@ -20,7 +20,6 @@ export const AppProvider = ({ children }) => {
   // --- States ---
   const [sidebarOpen, setSidebarOpen] = useState(false);
   
-  // ✅ FIX 1: Load from LocalStorage (Auto-Restore)
   const [chatHistory, setChatHistory] = useState(() => {
     try {
       const saved = localStorage.getItem('chat_history');
@@ -46,6 +45,11 @@ export const AppProvider = ({ children }) => {
   
   // Modal States
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  
+  // ✅ NEW: เพิ่ม State สำหรับ Pin Modal
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false); 
+  const [songsToPin, setSongsToPin] = useState([]); 
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [playlistToRename, setPlaylistToRename] = useState(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -57,23 +61,34 @@ export const AppProvider = ({ children }) => {
 
   // --- Effects ---
   useEffect(() => {
-    const token = localStorage.getItem('spotify_access_token');
-    if (token) {
-      handleFetchUserProfile();
-      fetchPinnedPlaylists();
-      fetchSuggestedPrompts();
+    const params = new URLSearchParams(window.location.search);
+    const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
+    const expiresAt = params.get('expires_at');
+
+    if (accessToken) {
+        localStorage.setItem('spotify_access_token', accessToken);
+        if (refreshToken) localStorage.setItem('spotify_refresh_token', refreshToken);
+        if (expiresAt) localStorage.setItem('spotify_expires_at', expiresAt);
+        window.history.replaceState({}, document.title, "/");
+        handleFetchUserProfile();
+        fetchPinnedPlaylists();
+    } else {
+        const savedToken = localStorage.getItem('spotify_access_token');
+        if (savedToken) {
+            handleFetchUserProfile();
+            fetchPinnedPlaylists();
+        }
     }
+    fetchSuggestedPrompts();
   }, []);
 
-  // ✅ FIX 2: Auto-Save to LocalStorage
   useEffect(() => {
     localStorage.setItem('chat_history', JSON.stringify(chatHistory));
   }, [chatHistory]);
 
-  // ✅ FIX THEME: Apply theme class to body
   useEffect(() => {
-    document.body.classList.remove('light-theme', 'dark-theme');
-    document.body.classList.add(`${currentTheme}-theme`);
+    document.documentElement.setAttribute('data-theme', currentTheme);
   }, [currentTheme]);
 
   // --- Actions ---
@@ -87,9 +102,9 @@ export const AppProvider = ({ children }) => {
   };
 
   const fetchPinnedPlaylists = async () => {
-    if (!userInfo?.id) return;
+    const token = localStorage.getItem('spotify_access_token');
+    if (!token) return;
     try {
-      // ✅ เรียกใช้ function ที่ import มาได้โดยตรงเลย ไม่ต้องผ่าน Helper
       const playlists = await getPinnedPlaylistsAPI(); 
       setPinnedPlaylists(playlists);
     } catch (error) {
@@ -100,23 +115,17 @@ export const AppProvider = ({ children }) => {
   const fetchSuggestedPrompts = async () => {
     try {
         const data = await getSuggestedPromptsAPI();
-        if (data && data.prompts) {
-            setSuggestedPrompts(data.prompts);
-        }
+        if (data && data.prompts) setSuggestedPrompts(data.prompts);
     } catch (error) {
         console.error("Failed to fetch prompts", error);
     }
   };
 
-  // ✅ FIX 3: Robust Send Message Function
   const sendMessageToBackend = async (messageOverride = null, intentOverride = null) => {
     const messageToSend = messageOverride || userInput;
-    
     if (!messageToSend.trim()) return;
 
-    if (!messageOverride) {
-        setUserInput('');
-    }
+    if (!messageOverride) setUserInput('');
 
     const userMsgId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newUserMsg = { id: userMsgId, isUser: true, message: messageToSend };
@@ -125,10 +134,7 @@ export const AppProvider = ({ children }) => {
     setIsFetching(true); 
 
     try {
-      console.log(`🚀 Sending: "${messageToSend}" (Intent: ${intentOverride})`);
       const data = await sendMessageToChatbot(messageToSend, intentOverride);
-      console.log("✅ Response:", data);
-
       const aiMsgId = `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const responseText = data.response || "จัดให้ตามคำขอครับ! (AI ไม่ได้ส่งข้อความตอบกลับ)";
 
@@ -144,14 +150,8 @@ export const AppProvider = ({ children }) => {
       if (data.songs_found && data.songs_found.length > 0) {
         setCurrentRecommendedSongs(data.songs_found);
       }
-
     } catch (error) {
-      console.error("Error sending message:", error);
-      const errorMsg = { 
-          id: `err-${Date.now()}`, 
-          isUser: false, 
-          message: "ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์" 
-      };
+      const errorMsg = { id: `err-${Date.now()}`, isUser: false, message: "ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์" };
       setChatHistory(prev => [...prev, errorMsg]);
     } finally {
       setIsFetching(false);
@@ -166,7 +166,6 @@ export const AppProvider = ({ children }) => {
       await createPlaylistAPI("AI Recommended Playlist", trackUris);
       alert("Playlist created successfully on Spotify!");
     } catch (error) {
-      console.error("Failed to create playlist", error);
       alert("Failed to create playlist.");
     } finally {
       setIsFetching(false);
@@ -188,38 +187,61 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleFeedback = async (uri, feedback) => {
-    try {
-      await sendFeedbackAPI(uri, feedback);
-    } catch (error) {
-      console.error("Failed to send feedback", error);
+    try { await sendFeedbackAPI(uri, feedback); } catch (error) { console.error("Failed to send feedback", error); }
+  };
+
+  // ✅ FIX: เปลี่ยนจาก prompt เป็นเปิด Modal (เก็บเพลงไว้ใน State รอ Confirm)
+  const handlePinClick = (songs, text) => {
+    setSongsToPin(songs);
+    setIsPinModalOpen(true); 
+  };
+
+  // ✅ NEW: ฟังก์ชัน Submit จริงๆ (จะถูกเรียกจาก PinModal)
+  const handleSubmitPin = async (name) => {
+    if (name && songsToPin.length > 0) {
+        setIsSubmitting(true);
+        try {
+            await pinPlaylistAPI(name, songsToPin, "Pinned from chat");
+            await fetchPinnedPlaylists();
+            setIsPinModalOpen(false);
+            setSongsToPin([]);
+        } catch (error) {
+            alert("Failed to pin playlist.");
+        } finally {
+            setIsSubmitting(false);
+        }
     }
   };
 
-  const handlePinClick = async (songs, text) => {
-    const name = prompt("ตั้งชื่อ Playlist ที่จะปักหมุด:", "My AI Playlist");
-    if (name) {
-      setIsFetching(true);
-      try {
-        await pinPlaylistAPI(name, songs, text);
-        fetchPinnedPlaylists();
-      } catch (error) {
-        alert("Failed to pin playlist.");
-      } finally {
-        setIsFetching(false);
-      }
-    }
-  };
-
+  // ✅ FIX CRITICAL: แก้ปัญหาจอขาวเมื่อกด Playlist ที่ Pin ไว้
   const displayPlaylistFromHistory = (playlist) => {
+    let songs = playlist.songs;
+    
+    // 1. ตรวจสอบว่า songs เป็น string หรือไม่ (ถ้ามาจาก DB SQLite มักจะเป็น JSON String)
+    if (typeof songs === 'string') {
+        try {
+            songs = JSON.parse(songs);
+        } catch (e) {
+            console.error("Error parsing songs JSON:", e);
+            songs = []; // ถ้าพังให้เป็น array ว่าง กันจอขาว
+        }
+    }
+    
+    // 2. ป้องกัน undefined / null
+    if (!Array.isArray(songs)) {
+        songs = [];
+    }
+
     const aiMsg = {
       id: `history-${Date.now()}`,
       isUser: false,
       message: `นี่คือ Playlist ที่คุณปักหมุดไว้: **${playlist.name}**\n${playlist.recommendation_text || ''}`,
-      songs: playlist.songs,
+      songs: songs, // ใช้ค่าที่ parse แล้ว
       recommendationText: playlist.recommendation_text
     };
+    
     setChatHistory(prev => [...prev, aiMsg]);
-    setCurrentRecommendedSongs(playlist.songs);
+    setCurrentRecommendedSongs(songs); // อัปเดต State ด้วย Array ที่ถูกต้อง
     if (window.innerWidth < 768) setSidebarOpen(false);
   };
 
@@ -294,7 +316,9 @@ export const AppProvider = ({ children }) => {
   };
   
   const handleToggleTheme = () => {
-    setCurrentTheme(prev => (prev === 'light' ? 'dark' : 'light'));
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+    setCurrentTheme(newTheme);
+    document.documentElement.setAttribute('data-theme', newTheme);
   };
 
   const handleSpotifyLogin = () => { window.location.href = 'http://localhost:8000/spotify_login'; };
@@ -321,7 +345,13 @@ export const AppProvider = ({ children }) => {
       handleSpotifyLogout,
       handleShowDetails,
       handleFeedback,
+      
+      // ✅ Updated Pin Functions
       handlePinClick,
+      handleSubmitPin,
+      isPinModalOpen,
+      setIsPinModalOpen,
+      
       displayPlaylistFromHistory,
       handleDeletePinnedPlaylist,
       isRenameModalOpen,
