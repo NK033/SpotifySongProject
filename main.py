@@ -78,7 +78,14 @@ class SummarizePlaylistRequest(BaseModel):
     song_uris: List[str]
 
 # --- Middleware, Frontend, DB init ---
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# main.py
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"], # ✅ แค่อันนี้อันเดียวพอครับ
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event(): await init_db()

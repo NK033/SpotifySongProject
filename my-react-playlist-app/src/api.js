@@ -1,5 +1,8 @@
 // src/api.js
 
+// 1. ดึง URL จาก .env ถ้าไม่มีให้เป็นค่าว่าง
+const BASE_URL = import.meta.env.VITE_API_URL || '';
+
 /**
  * A helper function to get the authentication headers from local storage.
  */
@@ -18,7 +21,6 @@ const getAuthHeaders = () => {
 
 /**
  * Sends a chat message to the backend.
- * (จับคู่กับ sendMessageToChatbot ใน AppContext)
  */
 export const sendMessageToChatbot = async (message, intent = null) => {
   let headers = { 'Content-Type': 'application/json' };
@@ -28,7 +30,8 @@ export const sendMessageToChatbot = async (message, intent = null) => {
     console.log("Sending chat message as a guest.");
   }
 
-  const response = await fetch('/chat', {
+  // ✅ ใช้ BASE_URL นำหน้า
+  const response = await fetch(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: headers,
     body: JSON.stringify({ message, intent })
@@ -40,7 +43,6 @@ export const sendMessageToChatbot = async (message, intent = null) => {
   }
   return response.json();
 };
-// Alias ไว้เผื่อที่อื่นเรียกใช้ชื่อเดิม
 export const postChatMessage = sendMessageToChatbot;
 
 /**
@@ -48,7 +50,8 @@ export const postChatMessage = sendMessageToChatbot;
  */
 export const fetchUserProfile = async () => {
     const headers = getAuthHeaders();
-    const response = await fetch('/me', { headers });
+    // ✅ ใช้ BASE_URL นำหน้า
+    const response = await fetch(`${BASE_URL}/me`, { headers });
     if (!response.ok) {
         throw new Error('Failed to fetch user profile');
     }
@@ -57,22 +60,20 @@ export const fetchUserProfile = async () => {
 
 /**
  * Fetches pinned playlists.
- * (จับคู่กับ getPinnedPlaylistsAPI ใน AppContext)
  */
 export const getPinnedPlaylistsAPI = async () => {
   const headers = getAuthHeaders();
-  const response = await fetch('/pinned_playlists', { headers });
+  // ✅ ใช้ BASE_URL นำหน้า
+  const response = await fetch(`${BASE_URL}/pinned_playlists`, { headers });
   if (!response.ok) {
     throw new Error('Could not fetch pinned playlists');
   }
   return response.json();
 };
-// Alias
 export const fetchPinnedPlaylists = getPinnedPlaylistsAPI;
 
 /**
  * Pins a new playlist.
- * (จับคู่กับ pinPlaylistAPI ใน AppContext)
  */
 export const pinPlaylistAPI = async (playlistName, songs, recommendationText) => {
     const simplifiedSongs = songs.map(song => ({
@@ -80,7 +81,8 @@ export const pinPlaylistAPI = async (playlistName, songs, recommendationText) =>
         album: { images: song.album.images }, external_urls: { spotify: song.external_urls.spotify }
     }));
 
-    const response = await fetch('/pin_playlist', {
+    // ✅ ใช้ BASE_URL นำหน้า
+    const response = await fetch(`${BASE_URL}/pin_playlist`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ 
@@ -93,29 +95,27 @@ export const pinPlaylistAPI = async (playlistName, songs, recommendationText) =>
         throw new Error('Failed to pin playlist');
     }
 };
-// Alias
 export const pinPlaylist = pinPlaylistAPI;
 
 /**
  * Sends feedback (like/dislike).
- * (จับคู่กับ sendFeedbackAPI ใน AppContext)
  */
 export const sendFeedbackAPI = async (trackUri, feedback) => {
-    await fetch('/feedback', {
+    // ✅ ใช้ BASE_URL นำหน้า
+    await fetch(`${BASE_URL}/feedback`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ track_uri: trackUri, feedback: feedback })
     });
 };
-// Alias
 export const sendFeedback = sendFeedbackAPI;
 
 /**
  * Fetches song details.
- * (จับคู่กับ getSongDetailsAPI ใน AppContext)
  */
 export const getSongDetailsAPI = async (songUri) => {
-    const response = await fetch(`/song_details/${encodeURIComponent(songUri)}`, { 
+    // ✅ ใช้ BASE_URL นำหน้า
+    const response = await fetch(`${BASE_URL}/song_details/${encodeURIComponent(songUri)}`, { 
         headers: getAuthHeaders() 
     });
     if (!response.ok) {
@@ -123,15 +123,14 @@ export const getSongDetailsAPI = async (songUri) => {
     }
     return response.json();
 };
-// Alias
 export const fetchSongDetails = getSongDetailsAPI;
 
 /**
  * Creates a Spotify playlist.
- * (จับคู่กับ createPlaylistAPI ใน AppContext)
  */
 export const createPlaylistAPI = async (playlistName, trackUris) => {
-    const response = await fetch('/create_playlist', {
+    // ✅ ใช้ BASE_URL นำหน้า
+    const response = await fetch(`${BASE_URL}/create_playlist`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ playlist_name: playlistName, track_uris: trackUris })
@@ -141,15 +140,14 @@ export const createPlaylistAPI = async (playlistName, trackUris) => {
     }
     return response.json();
 };
-// Alias
 export const createSpotifyPlaylist = createPlaylistAPI;
 
 /**
  * Deletes a pinned playlist.
- * (จับคู่กับ deletePinnedPlaylistAPI ใน AppContext)
  */
 export const deletePinnedPlaylistAPI = async (pinId) => {
-  const response = await fetch(`/pinned_playlists/${pinId}`, {
+  // ✅ ใช้ BASE_URL นำหน้า
+  const response = await fetch(`${BASE_URL}/pinned_playlists/${pinId}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
@@ -158,15 +156,14 @@ export const deletePinnedPlaylistAPI = async (pinId) => {
   }
   return { success: true };
 };
-// Alias
 export const deletePinnedPlaylist = deletePinnedPlaylistAPI;
 
 /**
  * Updates a pinned playlist.
- * (จับคู่กับ updatePinnedPlaylistAPI ใน AppContext)
  */
 export const updatePinnedPlaylistAPI = async (pinId, newName, songs) => {
-  const response = await fetch(`/pinned_playlists/${pinId}`, {
+  // ✅ ใช้ BASE_URL นำหน้า
+  const response = await fetch(`${BASE_URL}/pinned_playlists/${pinId}`, {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify({
@@ -179,15 +176,14 @@ export const updatePinnedPlaylistAPI = async (pinId, newName, songs) => {
   }
   return { success: true };
 };
-// Alias
 export const updatePinnedPlaylist = updatePinnedPlaylistAPI;
 
 /**
  * Summarizes a playlist.
- * (จับคู่กับ summarizePlaylistAPI ใน AppContext)
  */
 export const summarizePlaylistAPI = async (songUris) => {
-  const response = await fetch('/summarize_playlist', {
+  // ✅ ใช้ BASE_URL นำหน้า
+  const response = await fetch(`${BASE_URL}/summarize_playlist`, {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ song_uris: songUris })
@@ -197,17 +193,16 @@ export const summarizePlaylistAPI = async (songUris) => {
   }
   return response.json(); 
 };
-// Alias
 export const summarizePlaylist = summarizePlaylistAPI;
 
 /**
  * Fetches dynamic suggested prompts.
- * (จับคู่กับ getSuggestedPromptsAPI ใน AppContext)
  */
 export const getSuggestedPromptsAPI = async () => {
   try {
     const headers = getAuthHeaders();
-    const response = await fetch('/suggested_prompts', { headers });
+    // ✅ ใช้ BASE_URL นำหน้า
+    const response = await fetch(`${BASE_URL}/suggested_prompts`, { headers });
     if (!response.ok) {
       throw new Error('Could not fetch suggestions');
     }
@@ -217,5 +212,4 @@ export const getSuggestedPromptsAPI = async () => {
     return { prompts: [ '🎵 แนะนำเพลงส่วนตัวให้หน่อย', '📈 ขอเพลงฮิตติดชาร์ต', '🎧 หาเพลงเศร้าๆ' ] };
   }
 };
-// Alias
 export const fetchSuggestedPrompts = getSuggestedPromptsAPI;

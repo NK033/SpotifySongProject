@@ -50,7 +50,7 @@ function Sidebar({
             )}
 
             {/* ✅ FIX 2: Use optional chaining (?.) to safely check isLoggedIn */}
-            {!userInfo?.isLoggedIn ? (
+            {!userInfo ? (
               <button onClick={onLogin} className="mt-4 w-full py-2 px-4 rounded-full font-medium transition-colors bg-green-500 text-white hover:bg-green-600">
                 <i className="fab fa-spotify mr-2"></i> เข้าสู่ระบบด้วย Spotify
               </button>

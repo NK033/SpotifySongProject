@@ -10,7 +10,8 @@ import {
   deletePinnedPlaylistAPI,
   updatePinnedPlaylistAPI,
   summarizePlaylistAPI,
-  getSuggestedPromptsAPI 
+  getSuggestedPromptsAPI,
+  getPinnedPlaylistsAPI // ✅ เพิ่มตรงนี้: นำเข้ามาให้ครบ จะได้ไม่ต้องสร้าง Helper function
 } from '../api';
 
 const AppContext = createContext();
@@ -64,10 +65,16 @@ export const AppProvider = ({ children }) => {
     }
   }, []);
 
-  // ✅ FIX 2: Auto-Save to LocalStorage whenever chat changes
+  // ✅ FIX 2: Auto-Save to LocalStorage
   useEffect(() => {
     localStorage.setItem('chat_history', JSON.stringify(chatHistory));
   }, [chatHistory]);
+
+  // ✅ FIX THEME: Apply theme class to body
+  useEffect(() => {
+    document.body.classList.remove('light-theme', 'dark-theme');
+    document.body.classList.add(`${currentTheme}-theme`);
+  }, [currentTheme]);
 
   // --- Actions ---
   const handleFetchUserProfile = async () => {
@@ -82,7 +89,8 @@ export const AppProvider = ({ children }) => {
   const fetchPinnedPlaylists = async () => {
     if (!userInfo?.id) return;
     try {
-      const playlists = await import('../api').then(module => module.getPinnedPlaylistsAPI());
+      // ✅ เรียกใช้ function ที่ import มาได้โดยตรงเลย ไม่ต้องผ่าน Helper
+      const playlists = await getPinnedPlaylistsAPI(); 
       setPinnedPlaylists(playlists);
     } catch (error) {
       console.error("Failed to fetch pinned playlists", error);
@@ -110,7 +118,6 @@ export const AppProvider = ({ children }) => {
         setUserInput('');
     }
 
-    // ✅ Generate Unique ID for User Message
     const userMsgId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newUserMsg = { id: userMsgId, isUser: true, message: messageToSend };
     
@@ -122,10 +129,7 @@ export const AppProvider = ({ children }) => {
       const data = await sendMessageToChatbot(messageToSend, intentOverride);
       console.log("✅ Response:", data);
 
-      // ✅ Generate Unique ID for AI Message
       const aiMsgId = `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
-      // ✅ Fallback text if response is empty
       const responseText = data.response || "จัดให้ตามคำขอครับ! (AI ไม่ได้ส่งข้อความตอบกลับ)";
 
       const newAiMsg = { 
@@ -290,9 +294,7 @@ export const AppProvider = ({ children }) => {
   };
   
   const handleToggleTheme = () => {
-    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-    setCurrentTheme(newTheme);
-    document.documentElement.setAttribute('data-theme', newTheme);
+    setCurrentTheme(prev => (prev === 'light' ? 'dark' : 'light'));
   };
 
   const handleSpotifyLogin = () => { window.location.href = 'http://localhost:8000/spotify_login'; };
