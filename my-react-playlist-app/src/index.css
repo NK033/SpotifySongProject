@@ -10,26 +10,31 @@ body {
 }
 
 /* --- 🎨 ธีมหลัก (Glassmorphism Dark) --- */
-.dark-theme {
+[data-theme='dark'] {
   --bg-primary: #0d1117; 
   --bg-secondary: rgba(26, 32, 44, 0.95); 
   --bg-glass: rgba(255, 255, 255, 0.05);
   --text-primary: #e2e8f0; 
   --text-secondary: #a0aec0; 
+  --text-muted: #718096;
   --border-color: rgba(255, 255, 255, 0.1); 
+  --bg-hover: rgba(255, 255, 255, 0.08);
   --chat-bubble-ai: #2d3748; 
   --gradient-start: #1DB954; 
   --gradient-end: #1a9cff; 
 }
 
-.light-theme {
+[data-theme='light'] {
   --bg-primary: #f0f2f5; 
   --bg-secondary: rgba(255, 255, 255, 0.95); 
-  --bg-glass: rgba(82, 80, 80, 0.247);
+  --bg-glass: rgba(82, 80, 80, 0.1);
   --text-primary: #1a202c; 
-  --text-secondary: #3a3b3d; 
+  --text-secondary: #4a5568; 
+  --text-muted: #a0aec0;
   --border-color: rgba(0, 0, 0, 0.1); 
-  --chat-bubble-ai: #e2e8f0; 
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  /* ✅ FIX: ปรับสีพื้นหลัง Bubble AI ให้เข้มขึ้นเล็กน้อยใน Light Mode (จาก #edf2f7 เป็น #e2e8f1) */
+  --chat-bubble-ai: #e2e8f1; 
   --gradient-start: #1DB954;
   --gradient-end: #1a9cff;
 }
@@ -37,6 +42,7 @@ body {
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* --- 🎨 ตั้งค่า Sidebar/Modals ให้เป็นกระจก --- */
@@ -60,7 +66,7 @@ body {
 .suggested-prompt-btn:hover {
   background-color: var(--border-color);
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: rgba(128, 128, 128, 0.3);
 }
 
 /* --- 🎨 ปุ่มผู้ใช้ (User Bubble) --- */
@@ -78,6 +84,16 @@ body {
   transition: transform 0.3s ease;
   animation: fadeInUp 0.3s ease;
 }
+
+/* Song Card Hover & Animation */
+.song-card-animation {
+  transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+.song-card-animation:hover {
+  transform: translateY(-2px);
+  border-color: var(--gradient-start);
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

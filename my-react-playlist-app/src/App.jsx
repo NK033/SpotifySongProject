@@ -1,3 +1,4 @@
+// src/App.jsx
 import React from 'react';
 import { useAppContext } from './contexts/AppContext';
 import Sidebar from './components/Sidebar';
@@ -7,11 +8,12 @@ import SongDetailModal from './components/SongDetailModal';
 import RenameModal from './components/RenameModal';
 import ConfirmModal from './components/ConfirmModal';
 import LiveAgent from './components/LiveAgent';
-import PinModal from './components/PinModal'; // ✅ 1. Import มาใหม่
+import PinModal from './components/PinModal'; 
+// ✅ NEW: Import Modal ใหม่
+import FeedbackHistoryModal from './components/FeedbackHistoryModal';
 
 function App() {
   const {
-    // ... (ค่าเดิม) ...
     sidebarOpen, setSidebarOpen,
     chatHistory,
     userInput, setUserInput,
@@ -19,18 +21,16 @@ function App() {
     currentTheme, handleToggleTheme,
     currentRecommendedSongs,
     pinnedPlaylists,
-    
     userInfo,
     handleSpotifyLogin,
     handleSpotifyLogout,
-    
     sendMessageToBackend,
     handleCreatePlaylist,
     handleShowDetails,
     handleFeedback,
     handlePinClick,
     
-    // ✅ 2. ดึงค่าสำหรับ Pin Modal มาใช้
+    // Pin Modal
     isPinModalOpen, 
     setIsPinModalOpen,
     handleSubmitPin,
@@ -54,6 +54,9 @@ function App() {
     modalSong,
     modalAnalysis,
     
+    // Note: Feedback History Modal จัดการ State ภายในตัวเองผ่าน Context 
+    // เราเลยไม่ต้องดึง props มาส่งให้ในบรรทัดนี้ครับ
+    
   } = useAppContext();
 
   return (
@@ -67,7 +70,7 @@ function App() {
         pinnedPlaylists={pinnedPlaylists}
         onSelectPinned={displayPlaylistFromHistory}
         onDeletePinned={handleDeletePinnedPlaylist}
-        onUpdatePinned={handleOpenRenameModal} // ตรวจสอบว่าตรงนี้เรียก handleOpenRenameModal
+        onUpdatePinned={handleOpenRenameModal} 
         currentTheme={currentTheme}
         onToggleTheme={handleToggleTheme}
       />
@@ -96,7 +99,6 @@ function App() {
         isLoading={isSubmitting}
       />
       
-      {/* ✅ Rename Modal (ตรวจสอบว่ามีอยู่แล้ว) */}
       <RenameModal
         isOpen={isRenameModalOpen}
         currentName={playlistToRename?.name || ''}
@@ -105,13 +107,15 @@ function App() {
         isLoading={isSubmitting}
       />
 
-      {/* ✅ NEW: Pin Modal (เพิ่มใหม่ตรงนี้) */}
       <PinModal
         isOpen={isPinModalOpen}
         onClose={() => setIsPinModalOpen(false)}
         onConfirm={handleSubmitPin}
         isLoading={isSubmitting}
       />
+
+      {/* ✅ NEW: วาง Modal ใหม่ตรงนี้ (จะแสดงเมื่อ isFeedbackModalOpen เป็น true เอง) */}
+      <FeedbackHistoryModal />
       
       {(isFetching || isSubmitting) && <LoadingOverlay />}
 

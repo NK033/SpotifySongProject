@@ -11,15 +11,17 @@ import {
   updatePinnedPlaylistAPI,
   summarizePlaylistAPI,
   getSuggestedPromptsAPI,
-  getPinnedPlaylistsAPI 
+  getPinnedPlaylistsAPI,
+  getFeedbackHistoryAPI,
+  deleteFeedbackAPI,
+  getFeedbackStatusAPI 
 } from '../api';
 
 const AppContext = createContext();
 
 export const AppProvider = ({ children }) => {
-  // --- States ---
+  // ... (Previous states remain unchanged) ...
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  
   const [chatHistory, setChatHistory] = useState(() => {
     try {
       const saved = localStorage.getItem('chat_history');
@@ -35,21 +37,18 @@ export const AppProvider = ({ children }) => {
       return [];
     }
   });
-
   const [userInput, setUserInput] = useState('');
   const [isFetching, setIsFetching] = useState(false);
   const [currentTheme, setCurrentTheme] = useState('dark');
   const [currentRecommendedSongs, setCurrentRecommendedSongs] = useState([]);
   const [userInfo, setUserInfo] = useState(null);
   const [pinnedPlaylists, setPinnedPlaylists] = useState([]);
-  
-  // Modal States
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
-  
-  // ✅ NEW: เพิ่ม State สำหรับ Pin Modal
   const [isPinModalOpen, setIsPinModalOpen] = useState(false); 
   const [songsToPin, setSongsToPin] = useState([]); 
-  
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [feedbackHistory, setFeedbackHistory] = useState([]);
+  const [userFeedbackMap, setUserFeedbackMap] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [playlistToRename, setPlaylistToRename] = useState(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -59,7 +58,7 @@ export const AppProvider = ({ children }) => {
   const [modalAnalysis, setModalAnalysis] = useState(null);
   const [suggestedPrompts, setSuggestedPrompts] = useState([]);
 
-  // --- Effects ---
+  // ... (Effects remain unchanged) ...
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const accessToken = params.get('access_token');
@@ -73,11 +72,13 @@ export const AppProvider = ({ children }) => {
         window.history.replaceState({}, document.title, "/");
         handleFetchUserProfile();
         fetchPinnedPlaylists();
+        fetchUserFeedbackStatus(); 
     } else {
         const savedToken = localStorage.getItem('spotify_access_token');
         if (savedToken) {
             handleFetchUserProfile();
             fetchPinnedPlaylists();
+            fetchUserFeedbackStatus(); 
         }
     }
     fetchSuggestedPrompts();
@@ -91,7 +92,7 @@ export const AppProvider = ({ children }) => {
     document.documentElement.setAttribute('data-theme', currentTheme);
   }, [currentTheme]);
 
-  // --- Actions ---
+  // ... (Standard actions remain unchanged) ...
   const handleFetchUserProfile = async () => {
     try {
       const data = await fetchUserProfile();
@@ -109,6 +110,20 @@ export const AppProvider = ({ children }) => {
       setPinnedPlaylists(playlists);
     } catch (error) {
       console.error("Failed to fetch pinned playlists", error);
+    }
+  };
+
+  const fetchUserFeedbackStatus = async () => {
+    try {
+        const data = await getFeedbackStatusAPI();
+        const map = {};
+        if (data.likes) data.likes.forEach(uri => map[uri] = 'like');
+        if (data.dislikes) data.dislikes.forEach(uri => map[uri] = 'dislike');
+        // Note: Neutral items might not be returned by status API depending on implementation, 
+        // but that is fine as they shouldn't highlight buttons anyway.
+        setUserFeedbackMap(map);
+    } catch (error) {
+        console.error("Failed to sync feedback status", error);
     }
   };
 
@@ -158,11 +173,8 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ UPDATE: รับ parameter songs (ถ้ามี) ถ้าไม่มีให้ใช้ currentRecommendedSongs (Fallback)
   const handleCreatePlaylist = async (songs = []) => {
-    // ใช้ songs ที่ส่งมา ถ้าไม่มีให้ใช้ค่า Global (currentRecommendedSongs)
     const targetSongs = (Array.isArray(songs) && songs.length > 0) ? songs : currentRecommendedSongs;
-
     if (!targetSongs || targetSongs.length === 0) return;
     
     const trackUris = targetSongs.map(song => song.uri);
@@ -191,17 +203,28 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  // ✅ UPDATE: Save as 'neutral' instead of deleting
   const handleFeedback = async (uri, feedback) => {
-    try { await sendFeedbackAPI(uri, feedback); } catch (error) { console.error("Failed to send feedback", error); }
+    // 1. Optimistic Update
+    setUserFeedbackMap(prev => {
+        const newMap = { ...prev };
+        newMap[uri] = feedback; 
+        return newMap;
+    });
+
+    // 2. Call API
+    try { 
+        await sendFeedbackAPI(uri, feedback); 
+    } catch (error) { 
+        console.error("Failed to update feedback", error); 
+    }
   };
 
-  // ✅ FIX: เปลี่ยนจาก prompt เป็นเปิด Modal (เก็บเพลงไว้ใน State รอ Confirm)
   const handlePinClick = (songs, text) => {
     setSongsToPin(songs);
     setIsPinModalOpen(true); 
   };
 
-  // ✅ NEW: ฟังก์ชัน Submit จริงๆ (จะถูกเรียกจาก PinModal)
   const handleSubmitPin = async (name) => {
     if (name && songsToPin.length > 0) {
         setIsSubmitting(true);
@@ -218,35 +241,24 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ FIX CRITICAL: แก้ปัญหาจอขาวเมื่อกด Playlist ที่ Pin ไว้
   const displayPlaylistFromHistory = (playlist) => {
     let songs = playlist.songs;
-    
-    // 1. ตรวจสอบว่า songs เป็น string หรือไม่ (ถ้ามาจาก DB SQLite มักจะเป็น JSON String)
     if (typeof songs === 'string') {
-        try {
-            songs = JSON.parse(songs);
-        } catch (e) {
-            console.error("Error parsing songs JSON:", e);
-            songs = []; // ถ้าพังให้เป็น array ว่าง กันจอขาว
-        }
+        try { songs = JSON.parse(songs); } 
+        catch (e) { console.error("Error parsing songs JSON:", e); songs = []; }
     }
-    
-    // 2. ป้องกัน undefined / null
-    if (!Array.isArray(songs)) {
-        songs = [];
-    }
+    if (!Array.isArray(songs)) songs = [];
 
     const aiMsg = {
       id: `history-${Date.now()}`,
       isUser: false,
       message: `นี่คือ Playlist ที่คุณปักหมุดไว้: **${playlist.name}**\n${playlist.recommendation_text || ''}`,
-      songs: songs, // ใช้ค่าที่ parse แล้ว
+      songs: songs, 
       recommendationText: playlist.recommendation_text
     };
     
     setChatHistory(prev => [...prev, aiMsg]);
-    setCurrentRecommendedSongs(songs); // อัปเดต State ด้วย Array ที่ถูกต้อง
+    setCurrentRecommendedSongs(songs);
     if (window.innerWidth < 768) setSidebarOpen(false);
   };
 
@@ -326,11 +338,55 @@ export const AppProvider = ({ children }) => {
     document.documentElement.setAttribute('data-theme', newTheme);
   };
 
+  const handleOpenFeedbackModal = async () => {
+    setIsFeedbackModalOpen(true);
+    setIsFetching(true);
+    try {
+        const data = await getFeedbackHistoryAPI();
+        setFeedbackHistory(data);
+    } catch (error) {
+        console.error("Failed to fetch feedback history", error);
+    } finally {
+        setIsFetching(false);
+    }
+  };
+
+  // ✅ UPDATE: Save as 'neutral' instead of deleting
+  const handleUpdateFeedbackHistory = async (uri, newStatus) => {
+    // 1. Update Map (Global)
+    setUserFeedbackMap(prev => {
+        const next = { ...prev };
+        next[uri] = newStatus; // Always set status, even if neutral
+        return next;
+    });
+
+    // 2. Update List (History Modal UI)
+    setFeedbackHistory(prev => prev.map(item => {
+        if (item.uri === uri) {
+            return { ...item, feedback: newStatus };
+        }
+        return item;
+    }));
+
+    try {
+        // Always send feedback, effectively treating 'neutral' as a valid state
+        await sendFeedbackAPI(uri, newStatus);
+        
+        // If switching to neutral, we might want to update the history list view immediately
+        // but since we updated state above, it should reflect.
+    } catch (error) {
+        console.error("Failed to update feedback", error);
+        const data = await getFeedbackHistoryAPI();
+        setFeedbackHistory(data);
+    }
+  };
+
   const handleSpotifyLogin = () => { window.location.href = 'http://localhost:8000/spotify_login'; };
   const handleSpotifyLogout = () => {
     localStorage.clear();
     setUserInfo(null);
     setPinnedPlaylists([]);
+    setUserFeedbackMap({}); 
     window.location.href = '/';
   };
 
@@ -349,14 +405,11 @@ export const AppProvider = ({ children }) => {
       handleSpotifyLogin,
       handleSpotifyLogout,
       handleShowDetails,
-      handleFeedback,
-      
-      // ✅ Updated Pin Functions
+      handleFeedback, 
       handlePinClick,
       handleSubmitPin,
       isPinModalOpen,
       setIsPinModalOpen,
-      
       displayPlaylistFromHistory,
       handleDeletePinnedPlaylist,
       isRenameModalOpen,
@@ -374,7 +427,16 @@ export const AppProvider = ({ children }) => {
       modalAnalysis,
       handleSummarizePlaylist,
       handleToggleTheme,
-      suggestedPrompts
+      suggestedPrompts,
+      
+      isFeedbackModalOpen, 
+      setIsFeedbackModalOpen,
+      handleOpenFeedbackModal,
+      feedbackHistory,
+      handleUpdateFeedbackHistory,
+      
+      userFeedbackMap,
+      fetchUserFeedbackStatus
     }}>
       {children}
     </AppContext.Provider>

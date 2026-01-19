@@ -47,8 +47,8 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 # --- Local Imports ---
 from config import Config
-from database import add_pinned_playlist, get_pinned_playlists_by_user, get_user_mood_profile, init_db, save_user_feedback
-# (ลบ ChatRequest, ChatResponse ออกจากบรรทัดนี้ เพราะย้ายไปข้างบนแล้ว)
+from database import add_pinned_playlist, get_pinned_playlists_by_user, get_user_mood_profile, init_db, save_user_feedback, get_user_feedback_list, delete_user_feedback,get_user_feedback    # <--- NEW
+
 from spotify_api import (
     create_spotify_client, 
     get_spotify_auth_url, 
@@ -165,6 +165,115 @@ async def create_playlist_endpoint(req: CreatePlaylistRequest, sp_client: spotip
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/feedback/status")
+async def get_feedback_status_endpoint(sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Returns {'likes': [uri1, uri2], 'dislikes': [uri3]}
+        return await get_user_feedback(user_id) 
+    except Exception as e:
+        logging.error(f"Error fetching feedback status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/feedback/history")
+async def get_feedback_history_endpoint(sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # 1. Get feedback from DB
+        raw_feedback = await get_user_feedback_list(user_id)
+        
+        if not raw_feedback:
+            return []
+
+        # 2. Extract URIs to fetch details
+        track_uris = [item['track_uri'] for item in raw_feedback]
+        
+        # 3. Fetch track details from Spotify (Batch request)
+        # Split into chunks of 50 (Spotify API limit)
+        tracks_details = {}
+        for i in range(0, len(track_uris), 50):
+            chunk = track_uris[i:i + 50]
+            # Handle "spotify:track:ID" format
+            clean_ids = [uri.split(":")[-1] for uri in chunk]
+            try:
+                response = sp_client.tracks(clean_ids)
+                for track in response['tracks']:
+                    if track:
+                        tracks_details[track['uri']] = track
+            except Exception as e:
+                logging.error(f"Error fetching tracks from Spotify: {e}")
+
+        # 4. Combine DB data with Spotify Details
+        enriched_history = []
+        for item in raw_feedback:
+            uri = item['track_uri']
+            track_info = tracks_details.get(uri)
+            
+            if track_info:
+                enriched_history.append({
+                    "uri": uri,
+                    "name": track_info['name'],
+                    "artist": track_info['artists'][0]['name'],
+                    "album": track_info['album']['name'],
+                    "image_url": track_info['album']['images'][0]['url'] if track_info['album']['images'] else None,
+                    "feedback": item['feedback'], # 'like' or 'dislike'
+                    "timestamp": item['timestamp']
+                })
+            else:
+                # Fallback if Spotify fails or track not found
+                enriched_history.append({
+                    "uri": uri,
+                    "name": "Unknown Track",
+                    "artist": "Unknown Artist",
+                    "feedback": item['feedback'],
+                    "timestamp": item['timestamp']
+                })
+
+        return enriched_history
+
+    except Exception as e:
+        logging.error(f"Error fetching feedback history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- ✅ NEW: Endpoint to delete feedback ---
+@app.delete("/feedback/{track_uri}")
+async def delete_feedback_endpoint(track_uri: str, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        
+        # In case URI is passed with colons, we might need to handle it, 
+        # but usually fastapi handles path params as strings fine.
+        # Just ensure we use the full URI as stored in DB.
+        # If client sends "spotify:track:..." it might be tricky in URL path.
+        # Ideally, pass it as query param or body, but let's assume simple string for now.
+        # Better safety: Use Query param if URI contains special chars.
+        pass
+    except Exception as e:
+        pass
+    
+    # Let's rewrite this to be safer with URIs using Query Parameter or Body
+    return {"error": "Use DELETE /feedback with query param or body"}
+
+@app.delete("/feedback")
+async def delete_feedback_query_endpoint(track_uri: str, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    try:
+        user_profile = await get_user_profile(sp_client)
+        user_id = user_profile.get('id')
+        
+        await delete_user_feedback(user_id, track_uri)
+        return {"status": "success", "message": "Feedback removed"}
+    except Exception as e:
+        logging.error(f"Error removing feedback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Endpoint ใหม่สำหรับดึงรายละเอียดเพลง ---
 @app.get("/song_details/{song_uri}")

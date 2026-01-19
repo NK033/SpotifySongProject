@@ -442,3 +442,33 @@ async def get_all_analyzed_tracks() -> list[dict]:
         finally:
             conn.close()
     return await asyncio.to_thread(db_operation)
+
+async def get_user_feedback_list(user_id: str) -> list:
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                "SELECT track_uri, feedback, timestamp FROM user_feedback WHERE user_id = %s ORDER BY timestamp DESC",
+                (user_id,)
+            )
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)
+
+# ✅ NEW: Delete feedback (remove like/dislike)
+async def delete_user_feedback(user_id: str, track_uri: str):
+    def db_operation():
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM user_feedback WHERE user_id = %s AND track_uri = %s",
+                (user_id, track_uri)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+    return await asyncio.to_thread(db_operation)

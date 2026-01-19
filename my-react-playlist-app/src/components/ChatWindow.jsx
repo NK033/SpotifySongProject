@@ -19,7 +19,6 @@ function ChatWindow({
 }) {
   const chatEndRef = useRef(null);
 
-  // ✅ FIX: Timeout ensures DOM is painted before scrolling
   useEffect(() => {
     const timeoutId = setTimeout(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -37,7 +36,8 @@ function ChatWindow({
       
       <div className="flex-shrink-0 p-4 border-b border-[var(--border-color)] flex justify-between items-center bg-[var(--bg-secondary)] md:hidden">
         <h1 className="text-[var(--text-primary)] text-lg font-semibold">AI Playlist Chatbot</h1>
-        <button onClick={onOpenSidebar} className="text-gray-400 hover:text-white transition-colors">
+        {/* ✅ FIX: ปุ่ม Hamburger Menu (เปลี่ยน text-gray-400 เป็น text-secondary) */}
+        <button onClick={onOpenSidebar} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors">
           <i className="fas fa-bars"></i>
         </button>
       </div>
@@ -51,7 +51,6 @@ function ChatWindow({
             onShowDetails={onShowDetails}
             onPin={onPin}
             onSummarize={onSummarize}
-            // ✅ UPDATE: Pass create playlist function to message component
             onCreatePlaylist={onCreatePlaylist}
           />
         ))}
