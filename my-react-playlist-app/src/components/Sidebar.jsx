@@ -3,14 +3,13 @@ import React from 'react';
 function Sidebar({
   isOpen,
   onClose,
-  userInfo,
+  userInfo, // This might be null initially!
   onLogin,
   onLogout,
   pinnedPlaylists,
   onSelectPinned,
-  onDeletePinned,   // <-- รับ Prop
-  onUpdatePinned,   // <-- รับ Prop
-  // (onSummarize ถูกลบออกไปแล้ว)
+  onDeletePinned,
+  onUpdatePinned,
   currentTheme,
   onToggleTheme
 }) {
@@ -33,10 +32,25 @@ function Sidebar({
               <i className="fas fa-times"></i>
             </button>
           </div>
+          
           <div className="mt-4 flex flex-col items-center">
-            <img src={userInfo.avatar} alt="User Avatar" className="w-16 h-16 rounded-full mb-2" />
-            <span className="text-lg font-medium text-[var(--text-primary)] break-words w-full text-center">{userInfo.displayName}</span>
-            {!userInfo.isLoggedIn ? (
+            {/* ✅ FIX 1: Only show Avatar and Name if userInfo exists */}
+            {userInfo ? (
+              <>
+                <img src={userInfo.avatar} alt="User Avatar" className="w-16 h-16 rounded-full mb-2" />
+                <span className="text-lg font-medium text-[var(--text-primary)] break-words w-full text-center">
+                  {userInfo.displayName}
+                </span>
+              </>
+            ) : (
+              // Optional: Show a guest icon if no user info
+              <div className="w-16 h-16 rounded-full mb-2 bg-gray-600 flex items-center justify-center">
+                <i className="fas fa-user text-gray-300 text-2xl"></i>
+              </div>
+            )}
+
+            {/* ✅ FIX 2: Use optional chaining (?.) to safely check isLoggedIn */}
+            {!userInfo?.isLoggedIn ? (
               <button onClick={onLogin} className="mt-4 w-full py-2 px-4 rounded-full font-medium transition-colors bg-green-500 text-white hover:bg-green-600">
                 <i className="fab fa-spotify mr-2"></i> เข้าสู่ระบบด้วย Spotify
               </button>
@@ -46,11 +60,13 @@ function Sidebar({
               </button>
             )}
           </div>
+
           <div className="flex-grow p-2 overflow-y-auto mt-4 border-t border-[var(--border-color)]">
             <h3 className="text-sm font-semibold text-gray-400 mb-2 px-2 pt-2">ประวัติเพลย์ลิสต์ที่ Pin ไว้</h3>
             
             <div className="space-y-1">
-              {pinnedPlaylists.map((item) => (
+              {/* ✅ FIX 3: Add a safe check for pinnedPlaylists in case it is undefined */}
+              {pinnedPlaylists && pinnedPlaylists.map((item) => (
                 <div 
                   key={item.pin_id}
                   className="w-full flex items-center justify-between text-left text-sm p-2 rounded-lg hover:bg-[var(--bg-glass)] hover:border-[var(--border-color)] border border-transparent transition-colors text-gray-300 group"
@@ -65,7 +81,6 @@ function Sidebar({
                     </div>
                   </button>
                   
-                  {/* ปุ่มแก้ไข: เรียก onUpdatePinned โดยส่ง "item" ทั้งหมดไป */}
                   <button 
                     onClick={(e) => { e.stopPropagation(); onUpdatePinned(item); }}
                     className="flex-shrink-0 p-2 ml-1 rounded-full text-gray-500 hover:text-blue-400 hover:bg-[var(--bg-glass)] transition-all opacity-0 group-hover:opacity-100"
@@ -74,7 +89,6 @@ function Sidebar({
                     <i className="fas fa-pencil-alt fa-xs"></i>
                   </button>
 
-                  {/* ปุ่มลบ: เรียก onDeletePinned โดยส่ง "pin_id" และ "name" ไป */}
                   <button 
                     onClick={(e) => { e.stopPropagation(); onDeletePinned(item.pin_id, item.name); }}
                     className="flex-shrink-0 p-2 ml-1 rounded-full text-gray-500 hover:text-red-500 hover:bg-[var(--bg-glass)] transition-all opacity-0 group-hover:opacity-100"
