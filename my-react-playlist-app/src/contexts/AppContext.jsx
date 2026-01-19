@@ -12,16 +12,18 @@ import {
   summarizePlaylistAPI,
   getSuggestedPromptsAPI,
   getPinnedPlaylistsAPI,
+  // ✅ Import NEW functions
   getFeedbackHistoryAPI,
   deleteFeedbackAPI,
-  getFeedbackStatusAPI 
+  getFeedbackStatusAPI
 } from '../api';
 
 const AppContext = createContext();
 
 export const AppProvider = ({ children }) => {
-  // ... (Previous states remain unchanged) ...
+  // --- Original States ---
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  
   const [chatHistory, setChatHistory] = useState(() => {
     try {
       const saved = localStorage.getItem('chat_history');
@@ -37,18 +39,19 @@ export const AppProvider = ({ children }) => {
       return [];
     }
   });
+
   const [userInput, setUserInput] = useState('');
   const [isFetching, setIsFetching] = useState(false);
   const [currentTheme, setCurrentTheme] = useState('dark');
   const [currentRecommendedSongs, setCurrentRecommendedSongs] = useState([]);
   const [userInfo, setUserInfo] = useState(null);
   const [pinnedPlaylists, setPinnedPlaylists] = useState([]);
+  
+  // Modal States
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [isPinModalOpen, setIsPinModalOpen] = useState(false); 
   const [songsToPin, setSongsToPin] = useState([]); 
-  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
-  const [feedbackHistory, setFeedbackHistory] = useState([]);
-  const [userFeedbackMap, setUserFeedbackMap] = useState({});
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [playlistToRename, setPlaylistToRename] = useState(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -58,7 +61,12 @@ export const AppProvider = ({ children }) => {
   const [modalAnalysis, setModalAnalysis] = useState(null);
   const [suggestedPrompts, setSuggestedPrompts] = useState([]);
 
-  // ... (Effects remain unchanged) ...
+  // ✅ NEW States for Feedback History & Status
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [feedbackHistory, setFeedbackHistory] = useState([]);
+  const [userFeedbackMap, setUserFeedbackMap] = useState({}); // Stores { uri: 'like'/'dislike' }
+
+  // --- Effects ---
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const accessToken = params.get('access_token');
@@ -70,15 +78,17 @@ export const AppProvider = ({ children }) => {
         if (refreshToken) localStorage.setItem('spotify_refresh_token', refreshToken);
         if (expiresAt) localStorage.setItem('spotify_expires_at', expiresAt);
         window.history.replaceState({}, document.title, "/");
+        
+        // Initial Data Load
         handleFetchUserProfile();
         fetchPinnedPlaylists();
-        fetchUserFeedbackStatus(); 
+        fetchUserFeedbackStatus(); // ✅ Load Likes/Dislikes
     } else {
         const savedToken = localStorage.getItem('spotify_access_token');
         if (savedToken) {
             handleFetchUserProfile();
             fetchPinnedPlaylists();
-            fetchUserFeedbackStatus(); 
+            fetchUserFeedbackStatus(); // ✅ Load Likes/Dislikes
         }
     }
     fetchSuggestedPrompts();
@@ -92,7 +102,7 @@ export const AppProvider = ({ children }) => {
     document.documentElement.setAttribute('data-theme', currentTheme);
   }, [currentTheme]);
 
-  // ... (Standard actions remain unchanged) ...
+  // --- Actions ---
   const handleFetchUserProfile = async () => {
     try {
       const data = await fetchUserProfile();
@@ -113,14 +123,13 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  // ✅ NEW: Fetch all feedback status
   const fetchUserFeedbackStatus = async () => {
     try {
         const data = await getFeedbackStatusAPI();
         const map = {};
         if (data.likes) data.likes.forEach(uri => map[uri] = 'like');
         if (data.dislikes) data.dislikes.forEach(uri => map[uri] = 'dislike');
-        // Note: Neutral items might not be returned by status API depending on implementation, 
-        // but that is fine as they shouldn't highlight buttons anyway.
         setUserFeedbackMap(map);
     } catch (error) {
         console.error("Failed to sync feedback status", error);
@@ -175,6 +184,7 @@ export const AppProvider = ({ children }) => {
 
   const handleCreatePlaylist = async (songs = []) => {
     const targetSongs = (Array.isArray(songs) && songs.length > 0) ? songs : currentRecommendedSongs;
+
     if (!targetSongs || targetSongs.length === 0) return;
     
     const trackUris = targetSongs.map(song => song.uri);
@@ -203,20 +213,26 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ UPDATE: Save as 'neutral' instead of deleting
+  // ✅ UPDATE: Handle Feedback (Toggle logic: Like -> Neutral (Delete) -> Dislike)
   const handleFeedback = async (uri, feedback) => {
-    // 1. Optimistic Update
+    // 1. Optimistic Update (Map)
     setUserFeedbackMap(prev => {
         const newMap = { ...prev };
-        newMap[uri] = feedback; 
+        if (feedback === 'neutral') delete newMap[uri]; // Remove from map
+        else newMap[uri] = feedback; 
         return newMap;
     });
 
     // 2. Call API
     try { 
-        await sendFeedbackAPI(uri, feedback); 
+        if (feedback === 'neutral') {
+             await deleteFeedbackAPI(uri); // Call Delete Endpoint
+        } else {
+             await sendFeedbackAPI(uri, feedback); 
+        }
     } catch (error) { 
         console.error("Failed to update feedback", error); 
+        fetchUserFeedbackStatus(); // Revert on error
     }
   };
 
@@ -244,8 +260,7 @@ export const AppProvider = ({ children }) => {
   const displayPlaylistFromHistory = (playlist) => {
     let songs = playlist.songs;
     if (typeof songs === 'string') {
-        try { songs = JSON.parse(songs); } 
-        catch (e) { console.error("Error parsing songs JSON:", e); songs = []; }
+        try { songs = JSON.parse(songs); } catch (e) { songs = []; }
     }
     if (!Array.isArray(songs)) songs = [];
 
@@ -338,6 +353,16 @@ export const AppProvider = ({ children }) => {
     document.documentElement.setAttribute('data-theme', newTheme);
   };
 
+  const handleSpotifyLogin = () => { window.location.href = 'http://localhost:8000/spotify_login'; };
+  const handleSpotifyLogout = () => {
+    localStorage.clear();
+    setUserInfo(null);
+    setPinnedPlaylists([]);
+    setUserFeedbackMap({});
+    window.location.href = '/';
+  };
+
+  // ✅ NEW: Logic for Feedback History Modal
   const handleOpenFeedbackModal = async () => {
     setIsFeedbackModalOpen(true);
     setIsFetching(true);
@@ -351,16 +376,16 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ UPDATE: Save as 'neutral' instead of deleting
   const handleUpdateFeedbackHistory = async (uri, newStatus) => {
-    // 1. Update Map (Global)
+    // Sync with global Map
     setUserFeedbackMap(prev => {
         const next = { ...prev };
-        next[uri] = newStatus; // Always set status, even if neutral
+        if (newStatus === 'neutral') delete next[uri];
+        else next[uri] = newStatus;
         return next;
     });
 
-    // 2. Update List (History Modal UI)
+    // Sync with History List
     setFeedbackHistory(prev => prev.map(item => {
         if (item.uri === uri) {
             return { ...item, feedback: newStatus };
@@ -369,29 +394,22 @@ export const AppProvider = ({ children }) => {
     }));
 
     try {
-        // Always send feedback, effectively treating 'neutral' as a valid state
-        await sendFeedbackAPI(uri, newStatus);
-        
-        // If switching to neutral, we might want to update the history list view immediately
-        // but since we updated state above, it should reflect.
+        if (newStatus === 'neutral') {
+            await deleteFeedbackAPI(uri);
+        } else {
+            await sendFeedbackAPI(uri, newStatus);
+        }
     } catch (error) {
         console.error("Failed to update feedback", error);
+        // Reload if error
         const data = await getFeedbackHistoryAPI();
         setFeedbackHistory(data);
     }
   };
 
-  const handleSpotifyLogin = () => { window.location.href = 'http://localhost:8000/spotify_login'; };
-  const handleSpotifyLogout = () => {
-    localStorage.clear();
-    setUserInfo(null);
-    setPinnedPlaylists([]);
-    setUserFeedbackMap({}); 
-    window.location.href = '/';
-  };
-
   return (
     <AppContext.Provider value={{
+      // Original Values
       sidebarOpen, setSidebarOpen,
       chatHistory, setChatHistory,
       userInput, setUserInput,
@@ -405,7 +423,7 @@ export const AppProvider = ({ children }) => {
       handleSpotifyLogin,
       handleSpotifyLogout,
       handleShowDetails,
-      handleFeedback, 
+      handleFeedback, // Updated version
       handlePinClick,
       handleSubmitPin,
       isPinModalOpen,
@@ -429,12 +447,12 @@ export const AppProvider = ({ children }) => {
       handleToggleTheme,
       suggestedPrompts,
       
+      // ✅ New Feedback Values
       isFeedbackModalOpen, 
       setIsFeedbackModalOpen,
       handleOpenFeedbackModal,
       feedbackHistory,
       handleUpdateFeedbackHistory,
-      
       userFeedbackMap,
       fetchUserFeedbackStatus
     }}>

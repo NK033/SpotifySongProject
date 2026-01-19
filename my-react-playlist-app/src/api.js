@@ -1,6 +1,6 @@
 // src/api.js
 
-// ✅ 1. อ่านค่า URL จาก .env (ถ้าหาไม่เจอให้ใช้ http://localhost:8000 เป็นค่ากันตาย)
+// ✅ 1. Read URL from .env (User's original logic)
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 /**
@@ -9,7 +9,9 @@ const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const getAuthHeaders = () => {
   const accessToken = localStorage.getItem('spotify_access_token');
   if (!accessToken) {
-    throw new Error("User not logged in");
+    // Changing to console.warn to prevent crash loops if not logged in
+    console.warn("User not logged in (No Token)"); 
+    // throw new Error("User not logged in"); 
   }
   return {
     'Authorization': `Bearer ${accessToken}`,
@@ -42,7 +44,6 @@ export const sendMessageToChatbot = async (message, intent = null) => {
   }
   return response.json();
 };
-// ✅ Restored Alias
 export const postChatMessage = sendMessageToChatbot;
 
 /**
@@ -68,7 +69,6 @@ export const getPinnedPlaylistsAPI = async () => {
   }
   return response.json();
 };
-// ✅ Restored Alias
 export const fetchPinnedPlaylists = getPinnedPlaylistsAPI;
 
 /**
@@ -93,7 +93,6 @@ export const pinPlaylistAPI = async (playlistName, songs, recommendationText) =>
         throw new Error('Failed to pin playlist');
     }
 };
-// ✅ Restored Alias
 export const pinPlaylist = pinPlaylistAPI;
 
 /**
@@ -106,47 +105,7 @@ export const sendFeedbackAPI = async (trackUri, feedback) => {
         body: JSON.stringify({ track_uri: trackUri, feedback: feedback })
     });
 };
-// ✅ Restored Alias
 export const sendFeedback = sendFeedbackAPI;
-
-/**
- * ✅ NEW: Fetches feedback history (For the new Modal).
- */
-export const getFeedbackHistoryAPI = async () => {
-    const headers = getAuthHeaders();
-    const response = await fetch(`${BASE_URL}/feedback/history`, { headers });
-    if (!response.ok) {
-        throw new Error('Failed to fetch feedback history');
-    }
-    return response.json();
-};
-
-/**
- * ✅ NEW: Deletes a feedback entry (removes like/dislike).
- */
-export const deleteFeedbackAPI = async (trackUri) => {
-    const headers = getAuthHeaders();
-    const response = await fetch(`${BASE_URL}/feedback?track_uri=${encodeURIComponent(trackUri)}`, { 
-        method: 'DELETE',
-        headers 
-    });
-    if (!response.ok) {
-        throw new Error('Failed to delete feedback');
-    }
-    return response.json();
-};
-
-/**
- * ✅ NEW: Fetches feedback status (For syncing UI buttons).
- */
-export const getFeedbackStatusAPI = async () => {
-    const headers = getAuthHeaders();
-    const response = await fetch(`${BASE_URL}/feedback/status`, { headers });
-    if (!response.ok) {
-        throw new Error('Failed to fetch feedback status');
-    }
-    return response.json();
-};
 
 /**
  * Fetches song details.
@@ -160,7 +119,6 @@ export const getSongDetailsAPI = async (songUri) => {
     }
     return response.json();
 };
-// ✅ Restored Alias
 export const fetchSongDetails = getSongDetailsAPI;
 
 /**
@@ -177,7 +135,6 @@ export const createPlaylistAPI = async (playlistName, trackUris) => {
     }
     return response.json();
 };
-// ✅ Restored Alias
 export const createSpotifyPlaylist = createPlaylistAPI;
 
 /**
@@ -193,7 +150,6 @@ export const deletePinnedPlaylistAPI = async (pinId) => {
   }
   return { success: true };
 };
-// ✅ Restored Alias
 export const deletePinnedPlaylist = deletePinnedPlaylistAPI;
 
 /**
@@ -213,7 +169,6 @@ export const updatePinnedPlaylistAPI = async (pinId, newName, songs) => {
   }
   return { success: true };
 };
-// ✅ Restored Alias
 export const updatePinnedPlaylist = updatePinnedPlaylistAPI;
 
 /**
@@ -230,7 +185,6 @@ export const summarizePlaylistAPI = async (songUris) => {
   }
   return response.json(); 
 };
-// ✅ Restored Alias
 export const summarizePlaylist = summarizePlaylistAPI;
 
 /**
@@ -249,5 +203,38 @@ export const getSuggestedPromptsAPI = async () => {
     return { prompts: [ '🎵 แนะนำเพลงส่วนตัวให้หน่อย', '📈 ขอเพลงฮิตติดชาร์ต', '🎧 หาเพลงเศร้าๆ' ] };
   }
 };
-// ✅ Restored Alias
 export const fetchSuggestedPrompts = getSuggestedPromptsAPI;
+
+// ==========================================
+// ✅ NEW FUNCTIONS FOR FEEDBACK HISTORY
+// ==========================================
+
+export const getFeedbackHistoryAPI = async () => {
+    const headers = getAuthHeaders();
+    const response = await fetch(`${BASE_URL}/feedback/history`, { headers });
+    if (!response.ok) {
+        throw new Error('Failed to fetch feedback history');
+    }
+    return response.json();
+};
+
+export const deleteFeedbackAPI = async (trackUri) => {
+    const headers = getAuthHeaders();
+    const response = await fetch(`${BASE_URL}/feedback?track_uri=${encodeURIComponent(trackUri)}`, { 
+        method: 'DELETE',
+        headers 
+    });
+    if (!response.ok) {
+        throw new Error('Failed to delete feedback');
+    }
+    return response.json();
+};
+
+export const getFeedbackStatusAPI = async () => {
+    const headers = getAuthHeaders();
+    const response = await fetch(`${BASE_URL}/feedback/status`, { headers });
+    if (!response.ok) {
+        throw new Error('Failed to fetch feedback status');
+    }
+    return response.json();
+};
