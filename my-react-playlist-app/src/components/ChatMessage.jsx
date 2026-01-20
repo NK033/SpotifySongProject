@@ -7,43 +7,55 @@ function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize, onCr
 
   return (
     <div className={`flex items-start mb-4 ${isUser ? 'justify-end' : ''}`}>
-      {!isUser && <div className="w-10 h-10 rounded-full flex-shrink-0 mr-3"><i className="fas fa-robot text-4xl text-green-500"></i></div>}
-      <div className="flex-1">
+      
+      {/* ✅ AVATAR AI FIX: 
+         - มือถือ: w-8 h-8 (เล็กลง) 
+         - จอใหญ่: md:w-10 md:h-10 (เท่าเดิม)
+         - ไอคอน: text-2xl (มือถือ) -> md:text-3xl (จอใหญ่)
+      */}
+      {!isUser && (
+        <div className="w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 mr-2 md:mr-3 flex items-center justify-center">
+          <i className="fas fa-robot text-2xl md:text-3xl text-green-500"></i>
+        </div>
+      )}
+
+      <div className={`flex-1 ${isUser ? 'flex justify-end' : ''}`}> {/* เพิ่ม Flex container เพื่อคุม max-width ฝั่ง User ได้ง่ายขึ้น */}
         
         <div 
           className={`${
             isUser 
               ? 'user-chat-bubble text-white rounded-tr-none' 
               : 'bg-[var(--chat-bubble-ai)] rounded-tl-none'
-          } p-4 rounded-xl max-w-xl shadow`}
-        >
-          {/* 1. ส่วนข้อความ */}
-          <p className="text-sm whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: message }}></p>
+          } p-3 md:p-4 rounded-xl shadow 
           
-          {/* 2. ✅ MOVED: ย้ายปุ่ม Action มาไว้ตรงนี้ (ใต้ข้อความ - บนเพลง) */}
+          /* ✅ CHAT BUBBLE SIZE: ปรับให้กว้างเกือบเต็มจอในมือถือ (85%) แต่ไม่เกิน 2xl ในคอม */
+          max-w-[85vw] md:max-w-xl`}
+        >
+          {/* ส่วนข้อความ */}
+          <p className="text-sm md:text-base whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{ __html: message }}></p>
+          
+          {/* ปุ่ม Action (Pin / Create) */}
           {songs && songs.length > 0 && !isUser && (
-            <div className="mt-3 mb-3 pb-3 border-b border-gray-500 border-opacity-50 flex flex-wrap gap-2">
-              {/* ปุ่ม Pin */}
+            <div className="mt-3 mb-3 pb-3 border-b border-gray-500 border-opacity-30 flex flex-wrap gap-2">
               <button 
                 onClick={() => onPin(songs, recommendationText)} 
-                className="pin-playlist-btn text-xs py-1 px-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition flex items-center"
+                className="pin-playlist-btn text-xs py-1.5 px-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition flex items-center"
               >
-                <i className="fas fa-thumbtack mr-1"></i> Pin
+                <i className="fas fa-thumbtack mr-1.5"></i> Pin
               </button>
 
-              {/* ปุ่ม Create on Spotify */}
               <button 
                 onClick={() => onCreatePlaylist(songs)} 
-                className="create-playlist-btn text-xs py-1 px-3 rounded-full bg-green-600 hover:bg-green-700 text-white transition flex items-center"
+                className="create-playlist-btn text-xs py-1.5 px-3 rounded-full bg-green-600 hover:bg-green-700 text-white transition flex items-center"
               >
-                <i className="fab fa-spotify mr-1"></i> Create on Spotify
+                <i className="fab fa-spotify mr-1.5"></i> Create on Spotify
               </button>
             </div>
           )}
 
-          {/* 3. ส่วนรายการเพลง */}
+          {/* รายการเพลง */}
           {songs && (
-            <div className="mt-2"> {/* ปรับ margin-top ให้น้อยลงนิดหน่อยเพราะมีเส้นคั่นด้านบนแล้ว */}
+            <div className="mt-2 space-y-2">
               {songs.map((song, sIndex) => (
                 <SongCard
                   key={sIndex}

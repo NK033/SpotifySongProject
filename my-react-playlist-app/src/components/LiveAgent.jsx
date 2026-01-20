@@ -6,6 +6,10 @@ const LiveAgent = ({ onSendMessage }) => {
   const [status, setStatus] = useState(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // API URL
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   useEffect(() => {
     if (Notification.permission !== "granted") {
@@ -24,8 +28,8 @@ const LiveAgent = ({ onSendMessage }) => {
   };
 
   const getHeaders = () => {
-    const accessToken = localStorage.getItem('spotify_access_token') || localStorage.getItem('access_token');
-    const refreshToken = localStorage.getItem('spotify_refresh_token') || localStorage.getItem('refresh_token');
+    const accessToken = localStorage.getItem('spotify_access_token');
+    const refreshToken = localStorage.getItem('spotify_refresh_token');
     if (!accessToken) return null;
 
     const headers = {
@@ -43,7 +47,7 @@ const LiveAgent = ({ onSendMessage }) => {
       if (!headers) return; 
 
       try {
-        const response = await fetch('http://localhost:8000/api/live-status', {
+        const response = await fetch(`${API_BASE_URL}/api/live-status`, {
           method: 'GET',
           headers: headers 
         });
@@ -58,102 +62,169 @@ const LiveAgent = ({ onSendMessage }) => {
             sendSystemNotification(data); 
 
           } else if (!data.is_playing) {
-            // Log when agent hides to see if it's due to 'System Busy'
-            if (isVisible) console.log("🎵 LiveAgent: Hiding (Server says not playing or busy)");
-            setStatus(null);
-            setIsVisible(false);
+            if (isVisible) {
+                setStatus(null);
+                setIsVisible(false);
+                setIsExpanded(false);
+            }
           }
         }
-      } catch (error) {
-        console.error("Agent checking failed:", error);
-      }
+      } catch (error) {}
     };
 
     checkLiveStatus();
-    const intervalId = setInterval(checkLiveStatus, 5000); // 5 seconds polling
+    const intervalId = setInterval(checkLiveStatus, 5000); 
     return () => clearInterval(intervalId);
   }, [status, isVisible]);
 
   useEffect(() => {
-    if (isVisible && !isHovered) {
+    if (isVisible && !isHovered && !isExpanded) {
       const timer = setTimeout(() => {
         setIsVisible(false);
       }, 15000);
       return () => clearTimeout(timer);
     }
-  }, [isVisible, isHovered, status]);
+  }, [isVisible, isHovered, status, isExpanded]);
 
-  const handleArrangePlaylist = async () => {
+  const handleArrangePlaylist = async (e) => {
+    e.stopPropagation(); 
     if (!status) return;
-    
-    console.log("✨ LiveAgent: User clicked 'Create Playlist'");
-    
     const prompt = `ช่วยจัด Playlist ต่อเนื่องจากเพลง "${status.name}" ของ "${status.artist}" ให้หน่อย เอาแนว "${status.mood_data ? Object.keys(status.mood_data)[0] : 'คล้ายๆ กัน'}"`;
-    
-    console.log("📨 LiveAgent: Sending prompt:", prompt);
-    
     try {
         onSendMessage(prompt, 'get_recommendations');
         setIsVisible(false);
     } catch (e) {
-        console.error("❌ LiveAgent Error sending message:", e);
+        console.error("❌ LiveAgent Error:", e);
     }
   };
 
-  if (!status || !status.is_playing || !isVisible) return null;
+  if (!status || !status.is_playing) return null;
 
   return (
-    <div 
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      style={{
-        position: 'fixed', bottom: '20px', right: '20px', 
-        backgroundColor: '#1e1e1e', padding: '15px', borderRadius: '12px',
-        border: '1px solid #1db954', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-        maxWidth: '320px', zIndex: 9999, color: 'white', fontFamily: 'sans-serif',
-        transition: 'opacity 0.5s ease-in-out, transform 0.5s ease-in-out',
-        opacity: isVisible ? 1 : 0,
-        transform: isVisible ? 'translateY(0)' : 'translateY(20px)',
-        cursor: 'default'
-      }}
-    >
-      <div 
-        onClick={(e) => { e.stopPropagation(); setIsVisible(false); }}
-        style={{
-          position: 'absolute', top: '5px', right: '10px', 
-          cursor: 'pointer', color: '#b3b3b3', fontSize: '18px'
-        }}
-      >
-        &times;
-      </div>
+    <>
+      {/* ✅ CSS สำหรับ Sound Wave Animation */}
+      <style>{`
+        @keyframes sound-wave {
+          0% { height: 3px; }
+          50% { height: 10px; }
+          100% { height: 3px; }
+        }
+        .bar {
+          width: 3px;
+          background-color: #1db954;
+          border-radius: 2px;
+          animation: sound-wave 0.8s infinite ease-in-out;
+        }
+        .bar:nth-child(2) { animation-delay: 0.1s; }
+        .bar:nth-child(3) { animation-delay: 0.2s; }
+        .bar:nth-child(4) { animation-delay: 0.3s; }
+      `}</style>
 
-      <div style={{display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '12px'}}>
-        <img src={status.cover} alt="cover" style={{width: '60px', height: '60px', borderRadius: '8px', objectFit: 'cover'}} />
-        <div style={{overflow: 'hidden'}}>
-            <div style={{fontSize: '10px', textTransform: 'uppercase', color: '#1db954', letterSpacing: '1px', fontWeight: 'bold'}}>Now Listening</div>
-            <div style={{fontWeight: 'bold', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{status.name}</div>
-            <div style={{fontSize: '12px', color: '#b3b3b3'}}>{status.artist}</div>
+      <div 
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onClick={() => setIsExpanded(!isExpanded)}
+        className={`
+          fixed z-[100] transition-all duration-500 cubic-bezier(0.175, 0.885, 0.32, 1.275)
+          
+          /* Glassmorphism & Border */
+          bg-black/80 backdrop-blur-xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)]
+          overflow-hidden cursor-pointer
+          
+          /* --- Mobile Style --- */
+          bottom-24 left-4 right-4 
+          ${isExpanded 
+            ? 'h-auto rounded-3xl flex-col p-5 gap-4 items-start ring-1 ring-[#1db954]/50' 
+            : 'h-16 rounded-full flex-row items-center px-2 pr-4 gap-3 hover:scale-[1.02] active:scale-95'
+          }
+          
+          /* --- Desktop Style --- */
+          md:bottom-6 md:right-6 md:left-auto md:w-80 md:h-auto md:rounded-2xl md:flex-col md:items-stretch md:p-5 md:gap-4 md:cursor-default
+
+          /* Visibility Animation */
+          ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-24 opacity-0 pointer-events-none'}
+        `}
+      >
+        {/* Close Button (Desktop Only) */}
+        <div 
+          onClick={(e) => { e.stopPropagation(); setIsVisible(false); }}
+          className="hidden md:block absolute top-3 right-3 cursor-pointer text-white/40 hover:text-white transition-colors"
+        >
+          <i className="fas fa-times"></i>
+        </div>
+
+        {/* Content Container */}
+        <div className={`flex items-center gap-3 md:gap-4 flex-1 min-w-0 w-full`}>
+          
+          {/* Cover Image (Vinyl Style) */}
+          <div className={`relative flex-shrink-0 ${isExpanded ? 'w-16 h-16' : 'w-11 h-11'} md:w-16 md:h-16 transition-all duration-500`}>
+             <img 
+                src={status.cover} 
+                alt="cover" 
+                className={`w-full h-full rounded-full object-cover shadow-lg border-2 border-[#1db954]/30 animate-[spin_8s_linear_infinite]`} 
+             />
+             {/* Center Dot for Vinyl look */}
+             <div className="absolute inset-0 m-auto w-2 h-2 bg-black rounded-full border border-gray-700"></div>
+          </div>
+          
+          {/* Text Info */}
+          <div className="flex-1 min-w-0 flex flex-col justify-center">
+              {/* Sound Wave Indicator (Visible when Collapsed or Desktop) */}
+              <div className={`flex items-center gap-1 mb-1 ${isExpanded ? 'hidden' : 'flex'}`}>
+                 <div className="bar h-2"></div>
+                 <div className="bar h-3"></div>
+                 <div className="bar h-2"></div>
+                 <span className="text-[10px] font-bold text-[#1db954] tracking-widest uppercase ml-1">Live</span>
+              </div>
+
+              <div className={`text-white font-bold leading-tight truncate ${isExpanded ? 'text-lg' : 'text-xs'} md:text-base`}>
+                {status.name}
+              </div>
+              <div className={`text-white/60 truncate ${isExpanded ? 'text-sm' : 'text-[10px]'} md:text-sm`}>
+                {status.artist}
+              </div>
+          </div>
+
+          {/* Action Button (Collapsed Mode: Mini Magic Wand) */}
+          {!isExpanded && (
+            <button
+               onClick={handleArrangePlaylist}
+               className="md:hidden w-8 h-8 rounded-full bg-[#1db954]/20 text-[#1db954] flex items-center justify-center hover:bg-[#1db954] hover:text-white transition-colors"
+            >
+               <i className="fas fa-magic text-xs"></i>
+            </button>
+          )}
+
+          {/* Chevron Icon (Mobile) */}
+          <div className={`md:hidden text-white/30 transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`}>
+              <i className="fas fa-chevron-up"></i>
+          </div>
+        </div>
+        
+        {/* Expanded Content (AI Text & Full Button) */}
+        <div className={`
+          w-full flex flex-col gap-3 transition-all duration-500
+          ${isExpanded ? 'opacity-100 max-h-96' : 'opacity-0 max-h-0 hidden md:flex md:opacity-100 md:max-h-96'}
+        `}>
+          {/* AI Message Bubble */}
+          <div className="bg-white/5 p-3 rounded-xl text-xs text-gray-300 leading-relaxed border-l-2 border-[#1db954]">
+            <div className="flex items-center gap-2 mb-1 text-[#1db954] font-bold text-[10px] uppercase">
+                <i className="fas fa-robot"></i> AI Insight
+            </div>
+            "{status.notification}"
+          </div>
+
+          {/* Full Action Button */}
+          <button 
+            onClick={handleArrangePlaylist}
+            className="w-full py-3 bg-gradient-to-r from-[#1db954] to-[#1aa34a] hover:brightness-110 text-white font-bold rounded-xl text-sm shadow-lg shadow-green-900/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+          >
+            <i className="fas fa-magic"></i>
+            <span>Create Playlist from this</span>
+          </button>
         </div>
       </div>
-      
-      <div style={{
-          backgroundColor: '#2a2a2a', padding: '10px', borderRadius: '8px', 
-          fontSize: '13px', lineHeight: '1.4', marginBottom: '12px', borderLeft: '3px solid #1db954'
-      }}>
-        🤖 <b>AI Agent:</b> <br/> "{status.notification}"
-      </div>
-
-      <button 
-        onClick={handleArrangePlaylist}
-        style={{
-          width: '100%', padding: '10px', backgroundColor: '#1db954', 
-          border: 'none', borderRadius: '30px', color: 'white', fontWeight: 'bold', 
-          cursor: 'pointer', transition: 'transform 0.1s',
-          fontSize: '13px'
-      }}>
-        ✨ Create this Playlist!
-      </button>
-    </div>
+    </>
   );
 };
 

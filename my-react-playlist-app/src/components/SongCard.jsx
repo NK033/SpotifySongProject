@@ -15,80 +15,82 @@ function SongCard({ song, onShowDetails }) {
 
   const handleToggleFeedback = (type) => {
     let newStatus = null;
-    
-    // Toggle Logic
     if (currentStatus === type) {
-      // ✅ FIX: If pressing the same button, set to 'neutral' instead of removing
       newStatus = 'neutral'; 
     } else {
       newStatus = type;
     }
-
     handleFeedback(song.uri, newStatus);
   };
 
   return (
-    <div className="bg-[var(--bg-secondary)] p-3 rounded-lg flex items-center space-x-3 mb-2 hover:bg-[var(--bg-hover)] transition-colors relative group song-card-animation shadow-sm border border-[var(--border-color)] border-opacity-50">
+    <div className="bg-[var(--bg-secondary)] p-2 md:p-3 rounded-lg flex items-center space-x-2 md:space-x-3 mb-2 hover:bg-[var(--bg-hover)] transition-colors relative group song-card-animation shadow-sm border border-[var(--border-color)] border-opacity-50">
       
-      <img src={imageUrl} alt={song.name} className="w-14 h-14 rounded-md object-cover shadow-sm flex-shrink-0" />
+      {/* รูปปก: ลดขนาดลงในมือถือ (w-12) และใหญ่ขึ้นในจอคอม (md:w-14) */}
+      <img src={imageUrl} alt={song.name} className="w-12 h-12 md:w-14 md:h-14 rounded-md object-cover shadow-sm flex-shrink-0" />
       
       <div className="flex-1 min-w-0">
-        <h4 className="text-[var(--text-primary)] font-medium truncate text-base">{song.name}</h4>
-        <p className="text-[var(--text-secondary)] text-sm truncate">{artistName}</p>
+        {/* ชื่อเพลง: ใช้ break-words และ leading-tight เพื่อให้แสดงชื่อยาวๆ ได้โดยไม่ตกขอบ */}
+        <h4 className="text-[var(--text-primary)] font-medium text-sm md:text-base leading-tight break-words pr-1">
+          {song.name}
+        </h4>
+        <p className="text-[var(--text-secondary)] text-xs truncate mt-0.5">{artistName}</p>
         
         <div className="flex items-center text-xs text-[var(--text-muted)] mt-1 space-x-2">
-          <span className="truncate max-w-[120px]" title={albumName}>
+          {/* ชื่ออัลบั้ม: ซ่อนในมือถือ (hidden) แสดงเฉพาะจอ md ขึ้นไป */}
+          <span className="hidden md:flex items-center truncate max-w-[120px]" title={albumName}>
             <i className="fas fa-compact-disc mr-1"></i>{albumName}
           </span>
-          <span className="hidden sm:inline">•</span>
-          <span className="hidden sm:inline">{releaseDate.split('-')[0]}</span>
+          {/* ขีดคั่น: ซ่อนในมือถือ */}
+          <span className="hidden md:inline">•</span>
+          <span>{releaseDate.split('-')[0]}</span>
         </div>
       </div>
 
-      <div className="flex items-center space-x-2 flex-shrink-0 ml-2">
-        
+      {/* ส่วนปุ่มกด: ปรับขนาดให้กดง่าย แต่ไม่กินที่ */}
+      <div className="flex items-center space-x-1 flex-shrink-0 ml-1">
         <div className="flex space-x-1 mr-1">
-          {/* Like Button */}
+          {/* ปุ่ม Like */}
           <button 
             onClick={() => handleToggleFeedback('like')}
-            className={`p-1.5 rounded-full transition-all duration-200 
+            className={`p-2 rounded-full transition-all duration-200 
               ${currentStatus === 'like' 
-                ? 'text-green-500 bg-green-500/10 scale-110' 
+                ? 'text-green-500 bg-green-500/10' 
                 : 'text-[var(--text-muted)] hover:text-green-500 hover:bg-gray-500/10' 
-              } active:scale-95`}
+              }`}
             title="Like"
           >
-            <i className={`${currentStatus === 'like' ? 'fas' : 'far'} fa-thumbs-up text-lg`}></i>
+            <i className={`${currentStatus === 'like' ? 'fas' : 'far'} fa-thumbs-up text-base md:text-lg`}></i>
           </button>
 
-          {/* Dislike Button */}
+          {/* ปุ่ม Dislike */}
           <button 
             onClick={() => handleToggleFeedback('dislike')}
-            className={`p-1.5 rounded-full transition-all duration-200 
+            className={`p-2 rounded-full transition-all duration-200 
               ${currentStatus === 'dislike' 
-                ? 'text-red-500 bg-red-500/10 scale-110' 
+                ? 'text-red-500 bg-red-500/10' 
                 : 'text-[var(--text-muted)] hover:text-red-500 hover:bg-gray-500/10' 
-              } active:scale-95`}
+              }`}
             title="Dislike"
           >
-            <i className={`${currentStatus === 'dislike' ? 'fas' : 'far'} fa-thumbs-down text-lg mt-0.5`}></i>
+            <i className={`${currentStatus === 'dislike' ? 'fas' : 'far'} fa-thumbs-down text-base md:text-lg mt-0.5`}></i>
           </button>
         </div>
 
+        {/* ปุ่ม Details: ซ่อน Text เหลือแต่ Icon ในมือถือ */}
         <button 
           onClick={() => onShowDetails(song)} 
-          className="flex items-center justify-center py-1.5 px-3 rounded-full bg-gray-600 hover:bg-gray-700 text-white transition text-xs shadow-sm whitespace-nowrap"
+          className="flex items-center justify-center w-8 h-8 md:w-auto md:h-auto md:py-1.5 md:px-3 rounded-full bg-gray-600 hover:bg-gray-700 text-white transition text-xs shadow-sm"
           title="ดูรายละเอียด"
         >
-          <i className="fas fa-info-circle sm:mr-1"></i> 
-          <span className="hidden sm:inline">Details</span>
+          <i className="fas fa-info-circle md:mr-1"></i> 
+          <span className="hidden md:inline">Details</span>
         </button>
-
       </div>
 
       {popularity > 85 && (
         <div className="absolute top-0 left-0 mt-1 ml-1 pointer-events-none">
-          <span className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-sm flex items-center">
+          <span className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white text-[8px] md:text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-sm flex items-center">
             <i className="fas fa-fire mr-0.5"></i> HOT
           </span>
         </div>
