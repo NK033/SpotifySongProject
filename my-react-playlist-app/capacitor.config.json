@@ -1,0 +1,5 @@
+{
+  "appId": "com.example.app",
+  "appName": "my-react-playlist-app",
+  "webDir": "dist"
+}

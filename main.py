@@ -32,7 +32,8 @@ from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_user_top_trac
 from groq_ai import (
     groq_client, SMART_MODEL, FAST_MODEL, 
     GROQ_TOOLS,  # สำคัญ! ต้องมีตัวนี้
-    get_song_analysis_details_groq, summarize_playlist_groq, get_emotional_profile_from_groq
+    get_song_analysis_details_groq, summarize_playlist_groq, get_emotional_profile_from_groq,
+    rescue_lyrics_with_groq # ✅ Added rescue function
 )
 IS_SYSTEM_BUSY = False
 
@@ -646,9 +647,28 @@ async def get_live_status(sp_client: spotipy.Spotify = Depends(get_spotify_clien
     else:
         print(f"🔍 Analyzing New Track: {track_info['name']}")
         
-        # 3. ถ้าเป็นเพลงใหม่ -> ดึงเนื้อเพลง + วิเคราะห์โมเดล
+        # 3. ถ้าเป็นเพลงใหม่ -> ดึงเนื้อเพลง (Genius -> Rescue)
         lyrics = await genius_api.get_lyrics(track_info['name'], track_info['artist'])
         
+        # ✅ NEW: Fallback with Groq Rescue
+        if not lyrics:
+            print(f"⚠️ Genius failed for '{track_info['name']}'. Attempting Groq Rescue...")
+            try:
+                # Construct track object compatible with rescue_lyrics_with_groq
+                rescue_payload = [{
+                    'name': track_info['name'],
+                    'artists': [{'name': track_info['artist']}]
+                }]
+                rescued_data = await rescue_lyrics_with_groq(rescue_payload)
+                
+                # Key format matches groq_ai.py logic: f"{artist} - {title}"
+                key = f"{track_info['artist']} - {track_info['name']}"
+                lyrics = rescued_data.get(key)
+                if lyrics:
+                    print(f"✅ Groq Rescue Success for '{track_info['name']}'")
+            except Exception as e:
+                logging.error(f"Groq Rescue failed: {e}")
+
         if lyrics:
             # ใช้ Model ของคุณวิเคราะห์ (ไม่เสีย Token)
             # NEW (Good): Non-blocking
@@ -775,4 +795,3 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
     
 
 app.mount("/", StaticFiles(directory="my-react-playlist-app/dist", html=True), name="static-react-app")
-
