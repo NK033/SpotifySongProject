@@ -4,6 +4,7 @@ import ChatMessage from './ChatMessage';
 import SuggestedPrompts from './SuggestedPrompts'; 
 
 function ChatWindow({
+  userInfo, // รับ userInfo มาเพื่อเช็คสถานะ Login
   chatHistory,
   onFeedback,
   onShowDetails,
@@ -27,7 +28,7 @@ function ChatWindow({
   }, [chatHistory]);
 
   const handlePromptClick = (promptObj) => {
-    onUserInputChange({ target: { value: promptObj.prompt } }); 
+    // กรณีคลิก Prompt ให้ส่งค่าไปเลย ไม่ต้องเซ็ตลง Input ก็ได้
     onSendMessage(promptObj.prompt, promptObj.intent); 
   };
 
@@ -36,7 +37,6 @@ function ChatWindow({
       
       <div className="flex-shrink-0 p-4 border-b border-[var(--border-color)] flex justify-between items-center bg-[var(--bg-secondary)] md:hidden">
         <h1 className="text-[var(--text-primary)] text-lg font-semibold">AI Playlist Chatbot</h1>
-        {/* ✅ FIX: ปุ่ม Hamburger Menu (เปลี่ยน text-gray-400 เป็น text-secondary) */}
         <button onClick={onOpenSidebar} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors">
           <i className="fas fa-bars"></i>
         </button>
@@ -57,7 +57,8 @@ function ChatWindow({
         <div ref={chatEndRef} />
       </div>
 
-      {chatHistory.length <= 1 && (
+      {/* แสดง Suggested Prompts เมื่อ Login แล้วเท่านั้น */}
+      {userInfo && chatHistory.length <= 1 && (
         <SuggestedPrompts 
           prompts={suggestedPrompts} 
           onPromptClick={handlePromptClick} 
@@ -70,12 +71,14 @@ function ChatWindow({
             type="text"
             value={userInput}
             onChange={onUserInputChange}
-            onKeyPress={(e) => e.key === 'Enter' && onSendMessage(userInput, null)} 
+            // ✅ แก้ไข 1: เรียก onSendMessage() เฉยๆ ไม่ต้องส่ง userInput
+            onKeyPress={(e) => e.key === 'Enter' && onSendMessage()} 
             placeholder="พิมพ์ข้อความของคุณ..."
             className="w-full p-4 pl-6 pr-16 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors duration-300 text-[var(--text-primary)]"
           />
           <button 
-            onClick={() => onSendMessage(userInput, null)} 
+            // ✅ แก้ไข 2: เรียก onSendMessage() เฉยๆ เช่นกัน
+            onClick={() => onSendMessage()} 
             className="absolute right-2 text-white bg-gradient-to-r from-green-500 to-blue-500 rounded-full h-10 w-10 flex items-center justify-center hover:opacity-90 transition-opacity"
           >
             <i className="fas fa-paper-plane"></i>

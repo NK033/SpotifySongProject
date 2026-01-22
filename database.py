@@ -1,22 +1,19 @@
-# database.py (Cleaned Version)
+# database.py (Final Best Practice Version)
 import mysql.connector
 import asyncio
 import json
 import logging
 from config import Config
 
-# 1. Create a Global Pool Variable
 db_pool = None
 
 def get_db_connection():
     global db_pool
-    
-    # 2. Initialize the pool only once
     if db_pool is None:
         try:
             db_pool = mysql.connector.pooling.MySQLConnectionPool(
                 pool_name="spotify_pool",
-                pool_size=10,  # Keep 10 connections ready
+                pool_size=10,
                 pool_reset_session=True,
                 host=Config.DB_HOST,
                 user=Config.DB_USER,
@@ -28,14 +25,12 @@ def get_db_connection():
             print(f"❌ Error creating pool: {e}")
             raise e
 
-    # 3. Get a connection from the pool
     try:
         return db_pool.get_connection()
     except Exception as e:
         print(f"❌ Failed to get connection from pool: {e}")
         raise e
 
-# Helper for dictionary cursor
 def get_cursor(conn):
     return conn.cursor(dictionary=True)
 
@@ -45,23 +40,22 @@ async def init_db():
         try:
             cursor = conn.cursor()
             
-            # 1. Song Analyses (เก็บข้อมูลเพลง, เนื้อเพลง, และผลวิเคราะห์อารมณ์)
+            # 1. Song Analyses (Removed unused 'image_url')
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS song_analyses (
                     spotify_uri VARCHAR(255) PRIMARY KEY,
                     title VARCHAR(255),
                     artist VARCHAR(255),
                     album VARCHAR(255),
-                    image_url VARCHAR(500),      -- For Images
-                    lyrics LONGTEXT,             -- Cached Lyrics
-                    language VARCHAR(10),        -- Language Code
-                    mood_scores JSON,            -- ✅ THE CUSTOM MODEL SCORE
-                    analysis_json LONGTEXT,      -- Groq Description
+                    lyrics LONGTEXT,
+                    language VARCHAR(10),
+                    mood_scores JSON,
+                    analysis_json LONGTEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
             
-            # 2. User Mood Profiles (เก็บโปรไฟล์อารมณ์ของผู้ใช้)
+            # 2. User Mood Profiles
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_mood_profiles (
                     user_id VARCHAR(255) PRIMARY KEY,
@@ -70,7 +64,7 @@ async def init_db():
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
-            # 3. Recommendation History (เก็บประวัติการแนะนำเพื่อไม่ให้ซ้ำ)
+            # 3. Recommendation History
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS recommendation_history (
                     user_id VARCHAR(255) NOT NULL,
@@ -80,7 +74,7 @@ async def init_db():
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
-            # 4. User Feedback (เก็บ Like/Dislike)
+            # 4. User Feedback
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_feedback (
                     user_id VARCHAR(255) NOT NULL,
@@ -91,7 +85,7 @@ async def init_db():
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
-            # 5. Pinned Playlists (เก็บเพลย์ลิสต์ที่ปักหมุด)
+            # 5. Pinned Playlists (Added INDEX for user_id)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pinned_playlists (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -99,7 +93,8 @@ async def init_db():
                     playlist_name VARCHAR(255) NOT NULL,
                     songs_json LONGTEXT NOT NULL,
                     recommendation_text TEXT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_user_id (user_id)
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
@@ -111,6 +106,7 @@ async def init_db():
             conn.close()
     await asyncio.to_thread(setup_tables)
 
+# ... (ส่วนฟังก์ชันอื่นๆ เหมือนเดิมเป๊ะ ไม่ต้องแก้ครับ) ...
 async def get_song_analysis_from_db(spotify_uri: str) -> dict | None:
     def db_operation():
         conn = get_db_connection()
@@ -119,7 +115,6 @@ async def get_song_analysis_from_db(spotify_uri: str) -> dict | None:
             cursor.execute("SELECT analysis_json, mood_scores, lyrics FROM song_analyses WHERE spotify_uri = %s", (spotify_uri,))
             row = cursor.fetchone()
             if row:
-                # Merge fields for the app
                 data = json.loads(row['analysis_json'])
                 if row['mood_scores']:
                     data['predicted_moods'] = json.loads(row['mood_scores'])
@@ -138,11 +133,9 @@ async def save_song_analysis_to_db(spotify_track_data: dict, analysis_data: dict
             cursor = conn.cursor()
             spotify_uri = spotify_track_data.get('uri')
             
-            # Extract specific fields
             lyrics = analysis_data.get('lyrics', None)
             mood_scores = json.dumps(analysis_data.get('predicted_moods', {}), ensure_ascii=False)
             
-            # Remove them from the main analysis_json to avoid redundancy
             clean_analysis = analysis_data.copy()
             clean_analysis.pop('lyrics', None)
             clean_analysis.pop('predicted_moods', None)
@@ -340,7 +333,6 @@ async def get_all_analyzed_tracks() -> list[dict]:
         conn = get_db_connection()
         try:
             cursor = get_cursor(conn)
-            # ✅ Updated to read from mood_scores column
             cursor.execute("SELECT spotify_uri, mood_scores FROM song_analyses")
             rows = cursor.fetchall()
             results = []
@@ -371,7 +363,6 @@ async def get_user_feedback_list(user_id: str) -> list:
             conn.close()
     return await asyncio.to_thread(db_operation)
 
-# ✅ NEW: Delete feedback (remove like/dislike)
 async def delete_user_feedback(user_id: str, track_uri: str):
     def db_operation():
         conn = get_db_connection()

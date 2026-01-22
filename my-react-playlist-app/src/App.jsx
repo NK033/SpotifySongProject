@@ -9,7 +9,6 @@ import RenameModal from './components/RenameModal';
 import ConfirmModal from './components/ConfirmModal';
 import LiveAgent from './components/LiveAgent';
 import PinModal from './components/PinModal'; 
-// ✅ NEW: Import Modal ใหม่
 import FeedbackHistoryModal from './components/FeedbackHistoryModal';
 
 function App() {
@@ -21,7 +20,7 @@ function App() {
     currentTheme, handleToggleTheme,
     currentRecommendedSongs,
     pinnedPlaylists,
-    userInfo,
+    userInfo, // ✅ เราจะส่งตัวนี้ไป
     handleSpotifyLogin,
     handleSpotifyLogout,
     sendMessageToBackend,
@@ -30,7 +29,6 @@ function App() {
     handleFeedback,
     handlePinClick,
     
-    // Pin Modal
     isPinModalOpen, 
     setIsPinModalOpen,
     handleSubmitPin,
@@ -53,10 +51,6 @@ function App() {
     showSongModal, setShowSongModal,
     modalSong,
     modalAnalysis,
-    
-    // Note: Feedback History Modal จัดการ State ภายในตัวเองผ่าน Context 
-    // เราเลยไม่ต้องดึง props มาส่งให้ในบรรทัดนี้ครับ
-    
   } = useAppContext();
 
   return (
@@ -76,6 +70,7 @@ function App() {
       />
       
       <ChatWindow
+        userInfo={userInfo} // ✅ เพิ่มบรรทัดนี้: ส่งสถานะ Login ไปให้ ChatWindow รู้
         chatHistory={chatHistory}
         onFeedback={handleFeedback}
         onShowDetails={handleShowDetails}
@@ -114,7 +109,6 @@ function App() {
         isLoading={isSubmitting}
       />
 
-      {/* ✅ NEW: วาง Modal ใหม่ตรงนี้ (จะแสดงเมื่อ isFeedbackModalOpen เป็น true เอง) */}
       <FeedbackHistoryModal />
       
       {(isFetching || isSubmitting) && <LoadingOverlay />}

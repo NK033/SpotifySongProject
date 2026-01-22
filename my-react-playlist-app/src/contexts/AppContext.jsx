@@ -12,17 +12,16 @@ import {
   summarizePlaylistAPI,
   getSuggestedPromptsAPI,
   getPinnedPlaylistsAPI,
-  // ✅ Import NEW functions
   getFeedbackHistoryAPI,
   deleteFeedbackAPI,
   getFeedbackStatusAPI,
-  BASE_URL // ✅ FIX 1: Import the IP Address from api.js
+  BASE_URL 
 } from '../api';
 
 const AppContext = createContext();
 
 export const AppProvider = ({ children }) => {
-  // --- Original States ---
+  // --- States ---
   const [sidebarOpen, setSidebarOpen] = useState(false);
   
   const [chatHistory, setChatHistory] = useState(() => {
@@ -62,10 +61,10 @@ export const AppProvider = ({ children }) => {
   const [modalAnalysis, setModalAnalysis] = useState(null);
   const [suggestedPrompts, setSuggestedPrompts] = useState([]);
 
-  // ✅ NEW States for Feedback History & Status
+  // Feedback States
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const [feedbackHistory, setFeedbackHistory] = useState([]);
-  const [userFeedbackMap, setUserFeedbackMap] = useState({}); // Stores { uri: 'like'/'dislike' }
+  const [userFeedbackMap, setUserFeedbackMap] = useState({});
 
   // --- Effects ---
   useEffect(() => {
@@ -80,16 +79,15 @@ export const AppProvider = ({ children }) => {
         if (expiresAt) localStorage.setItem('spotify_expires_at', expiresAt);
         window.history.replaceState({}, document.title, "/");
         
-        // Initial Data Load
         handleFetchUserProfile();
         fetchPinnedPlaylists();
-        fetchUserFeedbackStatus(); // ✅ Load Likes/Dislikes
+        fetchUserFeedbackStatus(); 
     } else {
         const savedToken = localStorage.getItem('spotify_access_token');
         if (savedToken) {
             handleFetchUserProfile();
             fetchPinnedPlaylists();
-            fetchUserFeedbackStatus(); // ✅ Load Likes/Dislikes
+            fetchUserFeedbackStatus();
         }
     }
     fetchSuggestedPrompts();
@@ -124,7 +122,6 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ NEW: Fetch all feedback status
   const fetchUserFeedbackStatus = async () => {
     try {
         const data = await getFeedbackStatusAPI();
@@ -146,16 +143,38 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  // ✅ NEW: Intercept message if not logged in
   const sendMessageToBackend = async (messageOverride = null, intentOverride = null) => {
     const messageToSend = messageOverride || userInput;
+    
+    // ถ้าข้อความว่างเปล่า ให้ไม่ทำอะไร
     if (!messageToSend.trim()) return;
 
+    // เคลียร์ช่อง Input
     if (!messageOverride) setUserInput('');
 
+    // สร้าง ID สำหรับข้อความผู้ใช้
     const userMsgId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newUserMsg = { id: userMsgId, isUser: true, message: messageToSend };
     
+    // แสดงข้อความฝั่งผู้ใช้ทันที
     setChatHistory(prev => [...prev, newUserMsg]);
+
+    // 🔒 CHECK LOGIN STATUS HERE
+    if (!userInfo) {
+        setTimeout(() => {
+            const loginWarningMsg = {
+                id: `sys-${Date.now()}`,
+                isUser: false,
+                message: "🔒 กรุณา **เข้าสู่ระบบ (Login)** ด้วย Spotify ก่อนเริ่มใช้งานครับ\n\n(กดปุ่ม ☰ มุมซ้ายบน หรือเปิด Sidebar เพื่อ Login ได้เลย!)"
+            };
+            setChatHistory(prev => [...prev, loginWarningMsg]);
+        }, 500); // ดีเลย์นิดนึงให้ดูเป็นธรรมชาติ
+        
+        return; // ⛔️ STOP EXECUTION (ไม่ยิง API ไปหา Server)
+    }
+
+    // --- ถ้า Login แล้ว ให้ทำงานตามปกติ ---
     setIsFetching(true); 
 
     try {
@@ -214,26 +233,23 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ UPDATE: Handle Feedback (Toggle logic: Like -> Neutral (Delete) -> Dislike)
   const handleFeedback = async (uri, feedback) => {
-    // 1. Optimistic Update (Map)
     setUserFeedbackMap(prev => {
         const newMap = { ...prev };
-        if (feedback === 'neutral') delete newMap[uri]; // Remove from map
+        if (feedback === 'neutral') delete newMap[uri];
         else newMap[uri] = feedback; 
         return newMap;
     });
 
-    // 2. Call API
     try { 
         if (feedback === 'neutral') {
-             await deleteFeedbackAPI(uri); // Call Delete Endpoint
+             await deleteFeedbackAPI(uri); 
         } else {
              await sendFeedbackAPI(uri, feedback); 
         }
     } catch (error) { 
         console.error("Failed to update feedback", error); 
-        fetchUserFeedbackStatus(); // Revert on error
+        fetchUserFeedbackStatus(); 
     }
   };
 
@@ -354,7 +370,6 @@ export const AppProvider = ({ children }) => {
     document.documentElement.setAttribute('data-theme', newTheme);
   };
 
-  // ✅ FIX 2: Use the real IP address for Login
   const handleSpotifyLogin = () => { 
       window.location.href = `${BASE_URL}/spotify_login`; 
   };
@@ -367,7 +382,6 @@ export const AppProvider = ({ children }) => {
     window.location.href = '/';
   };
 
-  // ✅ NEW: Logic for Feedback History Modal
   const handleOpenFeedbackModal = async () => {
     setIsFeedbackModalOpen(true);
     setIsFetching(true);
@@ -382,7 +396,6 @@ export const AppProvider = ({ children }) => {
   };
 
   const handleUpdateFeedbackHistory = async (uri, newStatus) => {
-    // Sync with global Map
     setUserFeedbackMap(prev => {
         const next = { ...prev };
         if (newStatus === 'neutral') delete next[uri];
@@ -390,7 +403,6 @@ export const AppProvider = ({ children }) => {
         return next;
     });
 
-    // Sync with History List
     setFeedbackHistory(prev => prev.map(item => {
         if (item.uri === uri) {
             return { ...item, feedback: newStatus };
@@ -406,7 +418,6 @@ export const AppProvider = ({ children }) => {
         }
     } catch (error) {
         console.error("Failed to update feedback", error);
-        // Reload if error
         const data = await getFeedbackHistoryAPI();
         setFeedbackHistory(data);
     }
@@ -414,7 +425,6 @@ export const AppProvider = ({ children }) => {
 
   return (
     <AppContext.Provider value={{
-      // Original Values
       sidebarOpen, setSidebarOpen,
       chatHistory, setChatHistory,
       userInput, setUserInput,
@@ -428,7 +438,7 @@ export const AppProvider = ({ children }) => {
       handleSpotifyLogin,
       handleSpotifyLogout,
       handleShowDetails,
-      handleFeedback, // Updated version
+      handleFeedback, 
       handlePinClick,
       handleSubmitPin,
       isPinModalOpen,
@@ -452,7 +462,6 @@ export const AppProvider = ({ children }) => {
       handleToggleTheme,
       suggestedPrompts,
       
-      // ✅ New Feedback Values
       isFeedbackModalOpen, 
       setIsFeedbackModalOpen,
       handleOpenFeedbackModal,
