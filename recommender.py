@@ -3,7 +3,6 @@ import asyncio
 import spotipy
 import logging
 import re
-from gemini_ai import preload_gemini_details
 from datetime import datetime, timedelta
 from collections import Counter  
 import numpy as np
@@ -28,7 +27,6 @@ from database import (
     save_user_mood_profile, save_recommendation_history, get_recommendation_history,
     get_user_feedback, get_user_mood_profile_with_timestamp,get_all_analyzed_tracks
 )
-from gemini_ai import get_gemini_seed_expansion
 from groq_ai import (
     preload_groq_details, 
     rescue_lyrics_with_groq, 
@@ -264,7 +262,7 @@ async def build_user_mood_profile(sp_client: spotipy.Spotify, user_id: str) -> d
 async def analyze_and_cache_song_moods(
     spotify_track: dict, 
     lang_hint: str | None = None,
-    use_gemini: bool = True,
+    use_groq: bool = True,
     _cleaned_artist_name: str | None = None # <-- [FIX] เพิ่ม Parameter ใหม่
 ) -> tuple[dict | None, bool]:
     """
@@ -291,8 +289,8 @@ async def analyze_and_cache_song_moods(
     # --- (ตรรกะ V5 - Gemini Switch) ---
     strategy = lang_hint if lang_hint else 'latin' 
     
-    if not use_gemini:
-        # ** STRATEGY 0: "Genius-Only" Mode (use_gemini=False) **
+    if not use_groq:
+        # ** STRATEGY 0: "Genius-Only" Mode (use_groq=False) **
         logging.info(f"Genius-Only strategy for '{track_name}'.")
         # เราส่ง artist_name ที่สะอาดแล้วไปให้ get_lyrics
         lyrics = await get_lyrics(artist_name, track_name)
@@ -302,7 +300,7 @@ async def analyze_and_cache_song_moods(
         logging.info(f"Lang '{strategy}' strategy for '{track_name}'. Trying Genius (Plan A)...")
         lyrics = await get_lyrics(artist_name, track_name)
         
-        if (not lyrics or len(lyrics) < 50) and use_gemini:
+        if (not lyrics or len(lyrics) < 50) and use_groq:
             logging.warning(f"Genius failed for '{track_name}'. Trying Gemini (Plan B)...")
             rescued_data = await rescue_lyrics_with_groq([spotify_track])
             key = f"{artist_name} - {track_name}" # (Gemini rescue ยังอาจจะใช้ชื่อไม่สะอาด แต่นั่นคือ Plan B)

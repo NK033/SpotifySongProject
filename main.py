@@ -21,7 +21,6 @@ from recommender import get_intelligent_recommendations, get_mood_profile_from_m
 from lastfm_api import get_chart_top_tracks
 from fastapi import BackgroundTasks
 from recommender import get_intelligent_recommendations, update_user_profile_background
-from gemini_ai import get_song_analysis_details, summarize_playlist,get_emotional_profile_from_gemini,get_gemini_seed_expansion
 from pydantic import BaseModel
 from typing import List
 import database
