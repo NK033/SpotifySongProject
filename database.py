@@ -1,4 +1,4 @@
-# database.py
+# database.py (Cleaned Version)
 import mysql.connector
 import asyncio
 import json
@@ -24,7 +24,7 @@ def get_db_connection():
                 database=Config.DB_NAME
             )
             print("✅ Database Connection Pool Created")
-        except Error as e:
+        except mysql.connector.Error as e:
             print(f"❌ Error creating pool: {e}")
             raise e
 
@@ -45,7 +45,7 @@ async def init_db():
         try:
             cursor = conn.cursor()
             
-            # 1. Song Analyses (Updated with score & lyrics)
+            # 1. Song Analyses (เก็บข้อมูลเพลง, เนื้อเพลง, และผลวิเคราะห์อารมณ์)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS song_analyses (
                     spotify_uri VARCHAR(255) PRIMARY KEY,
@@ -61,41 +61,7 @@ async def init_db():
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
             
-            # 2. AI Plans
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ai_plans (
-                    genre VARCHAR(255) PRIMARY KEY,
-                    artists_json LONGTEXT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-            """)
-
-            # 3. Genres
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS genres (
-                    name VARCHAR(255) PRIMARY KEY
-                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-            """)
-
-            # 4. Artists
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS artists (
-                    name VARCHAR(255) PRIMARY KEY,
-                    genre VARCHAR(255),
-                    FOREIGN KEY (genre) REFERENCES genres (name) ON DELETE CASCADE
-                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-            """)
-
-            # 5. Genre Aliases
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS genre_aliases (
-                    alias VARCHAR(255) PRIMARY KEY,
-                    canonical_name VARCHAR(255),
-                    FOREIGN KEY (canonical_name) REFERENCES genres (name) ON DELETE CASCADE
-                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-            """)
-
-            # 6. User Mood Profiles
+            # 2. User Mood Profiles (เก็บโปรไฟล์อารมณ์ของผู้ใช้)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_mood_profiles (
                     user_id VARCHAR(255) PRIMARY KEY,
@@ -104,7 +70,7 @@ async def init_db():
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
-            # 7. Recommendation History
+            # 3. Recommendation History (เก็บประวัติการแนะนำเพื่อไม่ให้ซ้ำ)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS recommendation_history (
                     user_id VARCHAR(255) NOT NULL,
@@ -114,7 +80,7 @@ async def init_db():
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
-            # 8. User Feedback
+            # 4. User Feedback (เก็บ Like/Dislike)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_feedback (
                     user_id VARCHAR(255) NOT NULL,
@@ -125,7 +91,7 @@ async def init_db():
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             """)
 
-            # 9. Pinned Playlists
+            # 5. Pinned Playlists (เก็บเพลย์ลิสต์ที่ปักหมุด)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pinned_playlists (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -193,58 +159,6 @@ async def save_song_analysis_to_db(spotify_track_data: dict, analysis_data: dict
                  mood_scores,
                  json.dumps(clean_analysis, ensure_ascii=False))
             )
-            conn.commit()
-        finally:
-            conn.close()
-    await asyncio.to_thread(db_operation)
-
-# ... (The rest of the functions: get_cached_plan, save_user_mood_profile, etc. remain the same as previous turn) ...
-async def get_cached_plan(genre: str) -> list | None:
-    def db_operation():
-        conn = get_db_connection()
-        try:
-            cursor = get_cursor(conn)
-            cursor.execute("SELECT artists_json FROM ai_plans WHERE genre = %s", (genre,))
-            row = cursor.fetchone()
-            return json.loads(row['artists_json']) if row else None
-        finally:
-            conn.close()
-    return await asyncio.to_thread(db_operation)
-
-async def cache_plan(genre: str, artist_list: list):
-    def db_operation():
-        conn = get_db_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "REPLACE INTO ai_plans (genre, artists_json) VALUES (%s, %s)",
-                (genre, json.dumps(artist_list, ensure_ascii=False))
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    return await asyncio.to_thread(db_operation)
-
-async def get_artists_by_genre(genre: str) -> list[str]:
-    def db_operation():
-        conn = get_db_connection()
-        try:
-            cursor = get_cursor(conn)
-            cursor.execute("SELECT name FROM artists WHERE genre = %s", (genre,))
-            rows = cursor.fetchall()
-            return [row['name'] for row in rows]
-        finally:
-            conn.close()
-    return await asyncio.to_thread(db_operation)
-
-async def add_new_genre_and_artists(genre: str, artist_list: list[str]):
-    def db_operation():
-        conn = get_db_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("INSERT IGNORE INTO genres (name) VALUES (%s)", (genre,))
-            for artist in artist_list:
-                cursor.execute("INSERT IGNORE INTO artists (name, genre) VALUES (%s, %s)", (artist, genre))
             conn.commit()
         finally:
             conn.close()
