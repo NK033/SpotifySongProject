@@ -1,5 +1,5 @@
 {
-  "appId": "com.example.app",
-  "appName": "my-react-playlist-app",
+  "appId": "com.k033.spotify",
+  "appName": "SpotifyProject",
   "webDir": "dist"
 }
