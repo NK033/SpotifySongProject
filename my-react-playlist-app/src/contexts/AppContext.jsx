@@ -15,7 +15,8 @@ import {
   // ✅ Import NEW functions
   getFeedbackHistoryAPI,
   deleteFeedbackAPI,
-  getFeedbackStatusAPI
+  getFeedbackStatusAPI,
+  BASE_URL // ✅ FIX 1: Import the IP Address from api.js
 } from '../api';
 
 const AppContext = createContext();
@@ -353,7 +354,11 @@ export const AppProvider = ({ children }) => {
     document.documentElement.setAttribute('data-theme', newTheme);
   };
 
-  const handleSpotifyLogin = () => { window.location.href = 'http://localhost:8000/spotify_login'; };
+  // ✅ FIX 2: Use the real IP address for Login
+  const handleSpotifyLogin = () => { 
+      window.location.href = `${BASE_URL}/spotify_login`; 
+  };
+  
   const handleSpotifyLogout = () => {
     localStorage.clear();
     setUserInfo(null);

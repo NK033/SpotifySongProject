@@ -82,7 +82,8 @@ class SummarizePlaylistRequest(BaseModel):
 # main.py
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], # ✅ แค่อันนี้อันเดียวพอครับ
+    # allow_origins=["*"],  # ❌ Don't use "*" with credentials=True, it fails
+    allow_origin_regex="https?://.*",  # ✅ This allows http://localhost, http://10.31..., everything!
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,15 +105,22 @@ async def get_spotify_client(
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     access_token = authorization.split("Bearer ")[1]
 
+    # ✅ 1. Check if token is expired manually to prevent crash
+    now = int(time.time())
+    expires_at = int(x_expires_at) if x_expires_at else 0
+    
+    # If expired and NO refresh token -> Reject immediately (Don't let Spotipy crash)
+    if (expires_at - 60 < now) and not x_refresh_token:
+        raise HTTPException(status_code=401, detail="Token expired and no refresh token provided.")
+
     token_info = {
         "access_token": access_token,
-        "expires_at": int(x_expires_at) if x_expires_at else 0,
+        "expires_at": expires_at,
         "scope": SPOTIFY_SCOPES
     }
-    
 
-    if x_refresh_token:
-        token_info["refresh_token"] = x_refresh_token
+    # ✅ 2. Always ensure the key exists (even if None) to satisfy Spotipy
+    token_info["refresh_token"] = x_refresh_token if x_refresh_token else None
     
     if not token_info.get("access_token"):
          raise HTTPException(status_code=401, detail="Missing access token.")

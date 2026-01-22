@@ -1,7 +1,7 @@
 // src/api.js
 
 // ✅ 1. Read URL from .env (User's original logic)
-const BASE_URL = 'http://DESKTOP-CDV3AFC.local:8000';
+export const BASE_URL = 'http://10.31.222.250:8000';
 
 /**
  * A helper function to get the authentication headers from local storage.

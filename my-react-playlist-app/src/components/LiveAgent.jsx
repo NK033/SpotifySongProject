@@ -11,19 +11,25 @@ const LiveAgent = ({ onSendMessage }) => {
   // API URL
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+  // ✅ FIX 1: Safe Permission Request (Checks if "Notification" exists first)
   useEffect(() => {
-    if (Notification.permission !== "granted") {
+    if ("Notification" in window && Notification.permission !== "granted") {
       Notification.requestPermission();
     }
   }, []);
 
+  // ✅ FIX 2: Safe Notification Sending (Prevents crash on Android)
   const sendSystemNotification = (data) => {
-    if (Notification.permission === "granted" && document.hidden) {
-      new Notification(`🎵 Now Playing: ${data.name}`, {
-        body: `AI: "${data.notification}"`,
-        icon: data.cover,
-        silent: false 
-      });
+    if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+      try {
+        new Notification(`🎵 Now Playing: ${data.name}`, {
+          body: `AI: "${data.notification}"`,
+          icon: data.cover,
+          silent: false 
+        });
+      } catch (e) {
+        console.log("Notification failed safely:", e);
+      }
     }
   };
 

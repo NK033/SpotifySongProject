@@ -1,5 +1,12 @@
 {
   "appId": "com.k033.spotify",
-  "appName": "SpotifyProject",
-  "webDir": "dist"
+  "appName": "my-react-playlist-app",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true,
+    "allowNavigation": [
+      "*"
+    ]
+  }
 }
