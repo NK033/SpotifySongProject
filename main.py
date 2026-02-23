@@ -4,7 +4,6 @@ import json
 import re
 import os
 import random
-import random
 import spotipy
 import google.generativeai as genai
 # (*** เพิ่ม 1: Import Tool และ FunctionCallable ***)
@@ -904,7 +903,7 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
         {'prompt': '📈 ขอเพลงฮิตติดชาร์ต', 'intent': 'get_top_charts'}
     ]
 
-    # fallback สำหรับผู้ใช้ที่ยังไม่ล็อกอิน
+    # fallback สำหรับผู้ใช้ที่ยังไม่ล็อกอิน/ข้อมูลไม่พอ
     guest_pool = [
         {'prompt': '🎧 หาเพลงเศร้าๆ', 'intent': 'get_recommendations'},
         {'prompt': '🏃‍♂️ หาเพลงสำหรับวิ่ง', 'intent': 'get_recommendations'},
@@ -918,10 +917,8 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
     except HTTPException:
         return JSONResponse({"prompts": fixed_prompts + random.sample(guest_pool, k=2)})
 
-    dynamic_candidates = []
-
     try:
-        # 1) สุ่มศิลปินจาก seed/top tracks ของผู้ใช้
+        # 1) "หาเพลงของ artist" ต้องมีเสมอ (เมื่อ login)
         top_tracks = await get_user_top_tracks(sp_client, limit=20)
         artist_names = []
         seen = set()
@@ -933,13 +930,20 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
                     artist_names.append(name)
 
         random.shuffle(artist_names)
-        for artist_name in artist_names[:3]:
-            dynamic_candidates.append({
-                'prompt': f'🎧 หาเพลงของ {artist_name}',
+        if artist_names:
+            always_artist_prompt = {
+                'prompt': f'🎧 หาเพลงของ {artist_names[0]}',
                 'intent': 'get_recommendations'
-            })
+            }
+        else:
+            always_artist_prompt = {
+                'prompt': '🎧 หาเพลงของศิลปินที่ฉันชอบ',
+                'intent': 'get_recommendations'
+            }
 
-        # 2) สุ่มอารมณ์จากอันดับ 1-3 ของ mood profile (ไม่นับ neutral)
+        # 2) ช่อง dynamic อีก 1 อัน: สุ่มจาก mood top1-3 + fallback pool
+        dynamic_candidates = []
+
         mood_profile = await get_user_mood_profile(user_id)
         if mood_profile:
             filtered = {k: v for k, v in mood_profile.items() if k != 'neutral'}
@@ -954,10 +958,8 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
 
             ranked_moods = sorted(filtered.items(), key=lambda x: x[1], reverse=True)[:3]
             mood_prompts = [mood_map[m] for m, _ in ranked_moods if m in mood_map]
-            random.shuffle(mood_prompts)
             dynamic_candidates.extend(mood_prompts)
 
-        # 3) ถ้าข้อมูลผู้ใช้ยังน้อย เติม pool กลางให้สุ่มได้ตลอด
         fallback_dynamic_pool = [
             {'prompt': '🌙 หาเพลงฟังก่อนนอน', 'intent': 'get_recommendations'},
             {'prompt': '☕ หาเพลงชิลๆ ระหว่างทำงาน', 'intent': 'get_recommendations'},
@@ -966,9 +968,9 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
         ]
         dynamic_candidates.extend(fallback_dynamic_pool)
 
-        # dedupe + shuffle เพื่อให้ 2 ตัวท้ายสลับกันได้
+        # dedupe + กันชน prompt ซ้ำ
         unique_candidates = []
-        used = set()
+        used = {always_artist_prompt['prompt']}
         for item in dynamic_candidates:
             label = item.get('prompt')
             if label and label not in used:
@@ -976,17 +978,9 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
                 unique_candidates.append(item)
 
         random.shuffle(unique_candidates)
-        selected_dynamic = unique_candidates[:2]
+        extra_prompt = unique_candidates[0] if unique_candidates else random.choice(guest_pool)
 
-        # กันเคสเหลือไม่ครบ
-        if len(selected_dynamic) < 2:
-            for item in guest_pool:
-                if item['prompt'] not in {p['prompt'] for p in selected_dynamic}:
-                    selected_dynamic.append(item)
-                if len(selected_dynamic) == 2:
-                    break
-
-        return JSONResponse({"prompts": fixed_prompts + selected_dynamic})
+        return JSONResponse({"prompts": fixed_prompts + [always_artist_prompt, extra_prompt]})
 
     except Exception as e:
         logging.error(f"Error generating dynamic prompts: {e}")
