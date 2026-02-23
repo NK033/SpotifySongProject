@@ -1,6 +1,6 @@
 // src/components/Sidebar.jsx
 import React from 'react';
-// ✅ Import useAppContext
+// ✅ Import useAppContext เพื่อดึงฟังก์ชันลบแชท
 import { useAppContext } from '../contexts/AppContext'; 
 
 function Sidebar({
@@ -17,8 +17,8 @@ function Sidebar({
   onToggleTheme
 }) {
   
-  // ✅ Get the handler from Context
-  const { handleOpenFeedbackModal } = useAppContext(); 
+  // ✅ ดึง handleClearChat มาใช้ (และ handleOpenFeedbackModal ตัวเดิม)
+  const { handleOpenFeedbackModal, handleClearChat } = useAppContext(); 
 
   const userImage = userInfo?.images?.[0]?.url || userInfo?.avatar || "https://cdn-icons-png.flaticon.com/512/847/847969.png";
   const userName = userInfo?.display_name || userInfo?.displayName || "ผู้ใช้งาน";
@@ -32,9 +32,9 @@ function Sidebar({
 
       <div className={`fixed z-50 top-0 left-0 h-full w-64 bg-[var(--bg-secondary)] transform transition-transform duration-300 ease-in-out md:static md:translate-x-0 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex flex-col h-full p-4">
-          {/* ... (Existing Header and User Profile) ... */}
+          
+          {/* ส่วนหัว Sidebar (คงเดิม) */}
           <div className="flex items-center justify-between pb-4 border-b border-[var(--border-color)]">
-             {/* ... header content ... */}
              <div className="flex items-center space-x-2">
               <i className="fas fa-robot text-green-500"></i>
               <h2 className="text-[var(--text-primary)] text-lg font-semibold">AI Playlist</h2>
@@ -44,8 +44,8 @@ function Sidebar({
             </button>
           </div>
 
+          {/* ส่วน User Profile (คงเดิม) */}
           <div className="mt-4 flex flex-col items-center">
-             {/* ... User Profile code ... */}
              {userInfo ? (
               <>
                 <img src={userImage} alt="User" className="w-16 h-16 rounded-full mb-2 object-cover border-2 border-green-500" onError={(e) => { e.target.src = "https://cdn-icons-png.flaticon.com/512/847/847969.png"; }} />
@@ -56,7 +56,7 @@ function Sidebar({
                   <i className="fas fa-user text-[var(--text-muted)] text-2xl"></i>
                 </div>
             )}
-             {/* ... Login/Logout buttons ... */}
+             
              {!userInfo ? (
               <button onClick={onLogin} className="mt-4 w-full py-2 px-4 rounded-full font-medium transition-colors bg-green-500 text-white hover:bg-green-600">
                 <i className="fab fa-spotify mr-2"></i> เข้าสู่ระบบด้วย Spotify
@@ -68,13 +68,14 @@ function Sidebar({
             )}
           </div>
 
-          {/* ... Pinned Playlists ... */}
+          {/* ส่วนรายการเมนูและ Pin Playlist */}
            <div className="flex-grow p-2 overflow-y-auto mt-4 border-t border-[var(--border-color)]">
-                {/* ✅ NEW: Button to Open Feedback History */}
+                
+                {/* ปุ่มประวัติ Like/Dislike (คงเดิม) */}
                 {userInfo && (
                     <button 
                         onClick={handleOpenFeedbackModal}
-                        className="w-full flex items-center space-x-3 p-3 mb-4 rounded-xl bg-[var(--bg-glass)] hover:bg-[var(--bg-hover)] transition-all text-[var(--text-primary)] border border-transparent hover:border-[var(--border-color)] shadow-sm group"
+                        className="w-full flex items-center space-x-3 p-3 mb-2 rounded-xl bg-[var(--bg-glass)] hover:bg-[var(--bg-hover)] transition-all text-[var(--text-primary)] border border-transparent hover:border-[var(--border-color)] shadow-sm group"
                     >
                         <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
                             <i className="fas fa-history"></i>
@@ -86,8 +87,23 @@ function Sidebar({
                     </button>
                 )}
 
+                {/* ✅ เพิ่มปุ่ม: ล้างประวัติแชท (แทรกตรงนี้) */}
+                <button 
+                    onClick={handleClearChat}
+                    className="w-full flex items-center space-x-3 p-3 mb-4 rounded-xl bg-[var(--bg-glass)] hover:bg-red-500/10 hover:border-red-500/30 transition-all text-[var(--text-primary)] border border-transparent hover:border-red-500/30 shadow-sm group"
+                >
+                    <div className="w-8 h-8 rounded-full bg-red-500/10 flex items-center justify-center text-red-400 group-hover:bg-red-500 group-hover:text-white transition-colors">
+                        <i className="fas fa-trash-alt"></i>
+                    </div>
+                    <div className="text-left">
+                        <div className="font-medium text-sm group-hover:text-red-400">ล้างประวัติแชท</div>
+                        <div className="text-xs text-[var(--text-secondary)]">เริ่มบทสนทนาใหม่</div>
+                    </div>
+                </button>
+
                 <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-2 px-2 pt-2">ประวัติเพลย์ลิสต์ที่ Pin ไว้</h3>
-                {/* ... (Existing Pinned List loop) ... */}
+                
+                {/* Loop แสดงรายการ Pin (คงเดิม) */}
                 <div className="space-y-1">
                   {pinnedPlaylists && pinnedPlaylists.map((item) => (
                     <div key={item.pin_id} className="w-full flex items-center justify-between text-left text-sm p-2 rounded-lg hover:bg-[var(--bg-glass)] hover:border-[var(--border-color)] border border-transparent transition-colors text-[var(--text-secondary)] group">
@@ -102,6 +118,7 @@ function Sidebar({
                 </div>
            </div>
 
+          {/* ส่วนสลับ Theme (คงเดิม) */}
           <div className="mt-auto pt-4 border-t border-[var(--border-color)]">
             <button
               onClick={onToggleTheme}

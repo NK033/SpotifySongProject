@@ -82,6 +82,23 @@ def search_web(query: str) -> str:
         return f"Search failed: {e}"
 
 # --- 3. Robust Helpers ---
+def _clean_lyrics(text: str) -> str:
+    """
+    Cleaner + Flattening:
+    1. Remove tags [Intro], [Verse]
+    2. Remove markdown
+    3. Flatten all newlines to single spaces
+    """
+    if not text: return ""
+    text = re.sub(r'\[.*?\]', ' ', text)
+    text = re.sub(r'\(.*?\)', ' ', text)
+    text = re.sub(r'^```(lyrics|json)?', '', text, flags=re.MULTILINE)
+    text = re.sub(r'```$', '', text, flags=re.MULTILINE)
+    
+    # 🔥 Flatten Newlines
+    text = text.replace('\\n', ' ').replace('\n', ' ').replace('\r', ' ')
+    text = re.sub(r'\s+', ' ', text) # ลดช่องว่างซ้ำ
+    return text.strip()
 
 def _sanitize_json_string(json_str: str) -> str:
     """Clean JSON string."""
@@ -248,18 +265,18 @@ async def analyze_and_store_song_analysis_groq(spotify_track_data: dict) -> dict
         
         # ✅ 4. Save Everything
         combined_analysis = { 
-            "gemini_analysis": content,
+            "Details": content,
             "predicted_moods": mood_scores,
             "lyrics": lyrics
         } 
         await save_song_analysis_to_db(spotify_track_data, combined_analysis)
         return combined_analysis
     except Exception:
-        return { "gemini_analysis": "ไม่สามารถวิเคราะห์เพลงได้ในขณะนี้ (AI Busy)" }
+        return { "Details": "ไม่สามารถวิเคราะห์เพลงได้ในขณะนี้ (AI Busy)" }
 
 async def get_song_analysis_details_groq(sp_client: spotipy.Spotify, song_uri: str) -> dict:
     analysis_data = await get_song_analysis_from_db(song_uri)
-    if analysis_data and 'gemini_analysis' in analysis_data:
+    if analysis_data and 'Details' in analysis_data:
         return analysis_data
 
     try:
@@ -336,30 +353,33 @@ async def get_seed_expansion_groq(top_tracks: list[dict], user_message: str) -> 
 
 async def rescue_lyrics_with_groq(failed_tracks: list[dict]) -> dict:
     """
-    Attempts to fetch lyrics. 
-    🔥 ENABLED SEARCH here to find accurate lyrics from the web.
+    Rescue lyrics AND Normalize to English.
     """
     if not failed_tracks: return {}
     
-    logging.info(f"--- Groq Lyric Rescue (with Search): Processing {len(failed_tracks)} tracks ---")
-    
-    # Process one by one to ensure search accuracy and context
+    logging.info(f"--- Groq Lyric Rescue: Processing {len(failed_tracks)} tracks ---")
     all_lyrics = {}
     
     for t in failed_tracks:
         artist = t['artists'][0]['name']
         title = t['name']
         
+        # 🔥 Prompt นี้คือการทำ Normalization ในตัว
+        # สั่งให้หาเนื้อเพลง และถ้าไม่ใช่ภาษาอังกฤษ ให้แปลเป็นอังกฤษทันที
         prompt = f"""
-        Find the lyrics for: "{title}" by "{artist}".
-        Search the web if you don't know the lyrics internally.
+        Task: Find the lyrics for "{title}" by "{artist}".
         
-        Output JSON ONLY: {{ "lyrics": "..." }}
-        If absolutely not found even after searching, return empty string in JSON.
+        CRITICAL INSTRUCTION (DATA NORMALIZATION):
+        To ensure compatibility with our Emotion Analysis Engine, you MUST normalize the lyrics to ENGLISH.
+        
+        Rules:
+        1. If the song is already in English -> Return original lyrics.
+        2. If the song is NOT English (e.g., Japanese, Thai) -> Return **ENGLISH TRANSLATION**.
+        3. ❌ NO ROMAJI.
+        4. Output JSON ONLY: {{ "lyrics": "..." }}
         """
         
         try:
-            # 🔥 Allow search is TRUE here!
             content = await _call_groq_api(
                 SMART_MODEL, 
                 [{"role": "user", "content": prompt}], 
@@ -368,16 +388,18 @@ async def rescue_lyrics_with_groq(failed_tracks: list[dict]) -> dict:
             )
             
             data = json.loads(_sanitize_json_string(content))
-            lyrics = data.get("lyrics", "")
+            raw_lyrics = data.get("lyrics", "")
             
-            if lyrics and len(lyrics) > 50:
+            # Clean ให้เป็นบรรทัดเดียว
+            cleaned_lyrics = _clean_lyrics(raw_lyrics)
+            
+            if cleaned_lyrics and len(cleaned_lyrics) > 20:
                 key = f"{artist} - {title}"
-                all_lyrics[key] = lyrics
-                logging.info(f"✅ Found lyrics for {title} via Web Search")
-            
+                all_lyrics[key] = cleaned_lyrics
+                logging.info(f"✅ Rescue & Normalize Success: {title}")
+                
         except Exception as e:
-            logging.error(f"Lyric search failed for {title}: {e}")
-            # Skip to next song
+            logging.error(f"Rescue failed for {title}: {e}")
 
     return all_lyrics
 

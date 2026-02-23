@@ -1,7 +1,7 @@
 // src/api.js
 
 // ✅ 1. Read URL from .env (User's original logic)
-export const BASE_URL = 'http://10.31.222.250:8000';
+export const BASE_URL = 'http://localhost:8000';
 
 /**
  * A helper function to get the authentication headers from local storage.
@@ -187,6 +187,12 @@ export const summarizePlaylistAPI = async (songUris) => {
 };
 export const summarizePlaylist = summarizePlaylistAPI;
 
+const handleClearChat = () => {
+    if (window.confirm("คุณต้องการลบประวัติการสนทนาทั้งหมดใช่หรือไม่?")) {
+      setChatHistory(WELCOME_MESSAGE); // รีเซ็ตกลับไปเป็นข้อความต้อนรับ
+      localStorage.removeItem('chat_history'); // ลบออกจาก LocalStorage
+    }
+  };
 /**
  * Fetches dynamic suggested prompts.
  */

@@ -20,6 +20,15 @@ import {
 
 const AppContext = createContext();
 
+// ✅ 1. สร้างข้อความต้อนรับเป็นตัวแปร (เพื่อให้เรียกใช้ซ้ำตอนกด Reset ได้)
+const WELCOME_MESSAGE = [
+  { 
+    id: 'welcome-msg', 
+    isUser: false, 
+    message: "สวัสดีครับ! ผมคือ AI Music Assistant 🎵\nอยากให้ช่วยแนะนำเพลงแบบไหน หรือจัด Playlist อารมณ์ไหน บอกผมได้เลยครับ!" 
+  }
+];
+
 export const AppProvider = ({ children }) => {
   // --- States ---
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -27,13 +36,7 @@ export const AppProvider = ({ children }) => {
   const [chatHistory, setChatHistory] = useState(() => {
     try {
       const saved = localStorage.getItem('chat_history');
-      return saved ? JSON.parse(saved) : [
-        { 
-          id: 'welcome-msg', 
-          isUser: false, 
-          message: "สวัสดีครับ! ผมคือ AI Music Assistant 🎵\nอยากให้ช่วยแนะนำเพลงแบบไหน หรือจัด Playlist อารมณ์ไหน บอกผมได้เลยครับ!" 
-        }
-      ];
+      return saved ? JSON.parse(saved) : WELCOME_MESSAGE; // ✅ ใช้ตัวแปร
     } catch (e) {
       console.error("Error parsing chat history", e);
       return [];
@@ -102,6 +105,15 @@ export const AppProvider = ({ children }) => {
   }, [currentTheme]);
 
   // --- Actions ---
+  
+  // ✅ 2. เพิ่มฟังก์ชันล้างแชท (ต้องมีอันนี้ ปุ่มถึงจะทำงาน!)
+  const handleClearChat = () => {
+    if (window.confirm("คุณต้องการลบประวัติการสนทนาทั้งหมดใช่หรือไม่?")) {
+      setChatHistory(WELCOME_MESSAGE); // รีเซ็ตกลับไปเป็นข้อความต้อนรับ
+      localStorage.removeItem('chat_history'); // ลบออกจาก LocalStorage
+    }
+  };
+
   const handleFetchUserProfile = async () => {
     try {
       const data = await fetchUserProfile();
@@ -143,24 +155,15 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ NEW: Intercept message if not logged in
   const sendMessageToBackend = async (messageOverride = null, intentOverride = null) => {
     const messageToSend = messageOverride || userInput;
-    
-    // ถ้าข้อความว่างเปล่า ให้ไม่ทำอะไร
     if (!messageToSend.trim()) return;
-
-    // เคลียร์ช่อง Input
     if (!messageOverride) setUserInput('');
 
-    // สร้าง ID สำหรับข้อความผู้ใช้
     const userMsgId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newUserMsg = { id: userMsgId, isUser: true, message: messageToSend };
-    
-    // แสดงข้อความฝั่งผู้ใช้ทันที
     setChatHistory(prev => [...prev, newUserMsg]);
 
-    // 🔒 CHECK LOGIN STATUS HERE
     if (!userInfo) {
         setTimeout(() => {
             const loginWarningMsg = {
@@ -169,12 +172,10 @@ export const AppProvider = ({ children }) => {
                 message: "🔒 กรุณา **เข้าสู่ระบบ (Login)** ด้วย Spotify ก่อนเริ่มใช้งานครับ\n\n(กดปุ่ม ☰ มุมซ้ายบน หรือเปิด Sidebar เพื่อ Login ได้เลย!)"
             };
             setChatHistory(prev => [...prev, loginWarningMsg]);
-        }, 500); // ดีเลย์นิดนึงให้ดูเป็นธรรมชาติ
-        
-        return; // ⛔️ STOP EXECUTION (ไม่ยิง API ไปหา Server)
+        }, 500); 
+        return;
     }
 
-    // --- ถ้า Login แล้ว ให้ทำงานตามปกติ ---
     setIsFetching(true); 
 
     try {
@@ -204,9 +205,7 @@ export const AppProvider = ({ children }) => {
 
   const handleCreatePlaylist = async (songs = []) => {
     const targetSongs = (Array.isArray(songs) && songs.length > 0) ? songs : currentRecommendedSongs;
-
     if (!targetSongs || targetSongs.length === 0) return;
-    
     const trackUris = targetSongs.map(song => song.uri);
     setIsFetching(true);
     try {
@@ -242,11 +241,8 @@ export const AppProvider = ({ children }) => {
     });
 
     try { 
-        if (feedback === 'neutral') {
-             await deleteFeedbackAPI(uri); 
-        } else {
-             await sendFeedbackAPI(uri, feedback); 
-        }
+        if (feedback === 'neutral') { await deleteFeedbackAPI(uri); } 
+        else { await sendFeedbackAPI(uri, feedback); }
     } catch (error) { 
         console.error("Failed to update feedback", error); 
         fetchUserFeedbackStatus(); 
@@ -276,9 +272,7 @@ export const AppProvider = ({ children }) => {
 
   const displayPlaylistFromHistory = (playlist) => {
     let songs = playlist.songs;
-    if (typeof songs === 'string') {
-        try { songs = JSON.parse(songs); } catch (e) { songs = []; }
-    }
+    if (typeof songs === 'string') { try { songs = JSON.parse(songs); } catch (e) { songs = []; } }
     if (!Array.isArray(songs)) songs = [];
 
     const aiMsg = {
@@ -370,9 +364,7 @@ export const AppProvider = ({ children }) => {
     document.documentElement.setAttribute('data-theme', newTheme);
   };
 
-  const handleSpotifyLogin = () => { 
-      window.location.href = `${BASE_URL}/spotify_login`; 
-  };
+  const handleSpotifyLogin = () => { window.location.href = `${BASE_URL}/spotify_login`; };
   
   const handleSpotifyLogout = () => {
     localStorage.clear();
@@ -402,20 +394,13 @@ export const AppProvider = ({ children }) => {
         else next[uri] = newStatus;
         return next;
     });
-
     setFeedbackHistory(prev => prev.map(item => {
-        if (item.uri === uri) {
-            return { ...item, feedback: newStatus };
-        }
+        if (item.uri === uri) { return { ...item, feedback: newStatus }; }
         return item;
     }));
-
     try {
-        if (newStatus === 'neutral') {
-            await deleteFeedbackAPI(uri);
-        } else {
-            await sendFeedbackAPI(uri, newStatus);
-        }
+        if (newStatus === 'neutral') { await deleteFeedbackAPI(uri); } 
+        else { await sendFeedbackAPI(uri, newStatus); }
     } catch (error) {
         console.error("Failed to update feedback", error);
         const data = await getFeedbackHistoryAPI();
@@ -468,7 +453,10 @@ export const AppProvider = ({ children }) => {
       feedbackHistory,
       handleUpdateFeedbackHistory,
       userFeedbackMap,
-      fetchUserFeedbackStatus
+      fetchUserFeedbackStatus,
+      
+      // ✅ 3. ส่งฟังก์ชันนี้ออกไปให้ Sidebar ใช้งาน
+      handleClearChat 
     }}>
       {children}
     </AppContext.Provider>
