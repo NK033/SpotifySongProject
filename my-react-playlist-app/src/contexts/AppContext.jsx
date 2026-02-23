@@ -25,7 +25,7 @@ const WELCOME_MESSAGE = [
   { 
     id: 'welcome-msg', 
     isUser: false, 
-    message: "สวัสดีครับ! ผมคือ AI Music Assistant 🎵\nอยากให้ช่วยแนะนำเพลงแบบไหน หรือจัด Playlist อารมณ์ไหน บอกผมได้เลยครับ!" 
+    message: "สวัสดี AI Music Assistant พร้อมช่วยแนะนำเพลง 🎵\nอยากได้เพลงแบบไหน หรืออยากจัด Playlist อารมณ์ไหน บอกได้เลย" 
   }
 ];
 
@@ -180,7 +180,7 @@ export const AppProvider = ({ children }) => {
             const loginWarningMsg = {
                 id: `sys-${Date.now()}`,
                 isUser: false,
-                message: "🔒 กรุณา **เข้าสู่ระบบ (Login)** ด้วย Spotify ก่อนเริ่มใช้งานครับ\n\n(กดปุ่ม ☰ มุมซ้ายบน หรือเปิด Sidebar เพื่อ Login ได้เลย!)"
+                message: "🔒 กรุณา **เข้าสู่ระบบ (Login)** ด้วย Spotify ก่อนเริ่มใช้งาน\n\n(กดปุ่ม ☰ มุมซ้ายบน หรือเปิด Sidebar เพื่อ Login ได้เลย)"
             };
             setChatHistory(prev => [...prev, loginWarningMsg]);
         }, 500); 
@@ -192,7 +192,7 @@ export const AppProvider = ({ children }) => {
     try {
       const data = await sendMessageToChatbot(messageToSend, intentOverride);
       const aiMsgId = `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const responseText = data.response || "จัดให้ตามคำขอครับ! (AI ไม่ได้ส่งข้อความตอบกลับ)";
+      const responseText = data.response || "จัดให้ตามคำขอ (AI ไม่ได้ส่งข้อความตอบกลับ)";
 
       const playlistNameFromWeb = data.playlist_name || inferPlaylistName(responseText);
 
@@ -210,7 +210,7 @@ export const AppProvider = ({ children }) => {
         setCurrentRecommendedSongs(data.songs_found);
       }
     } catch (error) {
-      const errorMsg = { id: `err-${Date.now()}`, isUser: false, message: "ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์" };
+      const errorMsg = { id: `err-${Date.now()}`, isUser: false, message: "ขออภัย เกิดข้อผิดพลาดในการเชื่อมต่อกับเซิร์ฟเวอร์" };
       setChatHistory(prev => [...prev, errorMsg]);
     } finally {
       setIsFetching(false);
