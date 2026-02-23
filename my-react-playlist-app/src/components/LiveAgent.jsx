@@ -23,7 +23,7 @@ const LiveAgent = ({ onSendMessage }) => {
     if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
       try {
         new Notification(`🎵 Now Playing: ${data.name}`, {
-          body: `AI: "${data.notification}"`,
+          body: `${data.notification}`,
           icon: data.cover,
           silent: false 
         });
@@ -207,19 +207,11 @@ const LiveAgent = ({ onSendMessage }) => {
           </div>
         </div>
         
-        {/* Expanded Content (AI Text & Full Button) */}
+        {/* Expanded Content (Button only, mobile-style) */}
         <div className={`
           w-full flex flex-col gap-3 transition-all duration-500
           ${isExpanded ? 'opacity-100 max-h-96' : 'opacity-0 max-h-0 hidden md:flex md:opacity-100 md:max-h-96'}
         `}>
-          {/* AI Message Bubble */}
-          <div className="bg-white/5 p-3 rounded-xl text-xs text-gray-300 leading-relaxed border-l-2 border-[#1db954]">
-            <div className="flex items-center gap-2 mb-1 text-[#1db954] font-bold text-[10px] uppercase">
-                <i className="fas fa-robot"></i> AI Insight
-            </div>
-            "{status.notification}"
-          </div>
-
           {/* Full Action Button */}
           <button 
             onClick={handleArrangePlaylist}
