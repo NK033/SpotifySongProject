@@ -9,6 +9,7 @@ import RenameModal from './components/RenameModal';
 import ConfirmModal from './components/ConfirmModal';
 import LiveAgent from './components/LiveAgent';
 import PinModal from './components/PinModal'; 
+import CreateSpotifyModal from './components/CreateSpotifyModal';
 import FeedbackHistoryModal from './components/FeedbackHistoryModal';
 
 function App() {
@@ -32,6 +33,9 @@ function App() {
     isPinModalOpen, 
     setIsPinModalOpen,
     handleSubmitPin,
+    isCreateSpotifyModalOpen,
+    handleCloseCreateSpotifyModal,
+    handleSubmitCreateSpotifyPlaylist,
 
     displayPlaylistFromHistory,
     handleSummarizePlaylist,
@@ -107,6 +111,13 @@ function App() {
         onClose={() => setIsPinModalOpen(false)}
         onConfirm={handleSubmitPin}
         isLoading={isSubmitting}
+      />
+
+      <CreateSpotifyModal
+        isOpen={isCreateSpotifyModalOpen}
+        onClose={handleCloseCreateSpotifyModal}
+        onConfirm={handleSubmitCreateSpotifyPlaylist}
+        isLoading={isFetching}
       />
 
       <FeedbackHistoryModal />

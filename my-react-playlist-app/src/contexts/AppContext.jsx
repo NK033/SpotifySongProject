@@ -65,6 +65,8 @@ export const AppProvider = ({ children }) => {
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [isPinModalOpen, setIsPinModalOpen] = useState(false); 
   const [songsToPin, setSongsToPin] = useState([]); 
+  const [isCreateSpotifyModalOpen, setIsCreateSpotifyModalOpen] = useState(false);
+  const [songsToCreateOnSpotify, setSongsToCreateOnSpotify] = useState([]);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [playlistToRename, setPlaylistToRename] = useState(null);
@@ -222,15 +224,43 @@ export const AppProvider = ({ children }) => {
   const handleCreatePlaylist = async (songs = [], playlistNameFromWeb = '') => {
     const targetSongs = (Array.isArray(songs) && songs.length > 0) ? songs : currentRecommendedSongs;
     if (!targetSongs || targetSongs.length === 0) return;
+
+    const normalizedName = playlistNameFromWeb?.trim?.() || '';
+    if (!normalizedName) {
+      setSongsToCreateOnSpotify(targetSongs);
+      setIsCreateSpotifyModalOpen(true);
+      return;
+    }
+
     const trackUris = targetSongs.map(song => song.uri);
-    const playlistName = playlistNameFromWeb && playlistNameFromWeb.trim()
-      ? playlistNameFromWeb.trim()
-      : `AI Playlist ${new Date().toLocaleString()}`;
-      
+
+    setIsFetching(true);
+    try {
+      await createPlaylistAPI(normalizedName, trackUris);
+      alert("Playlist created successfully on Spotify!");
+    } catch (error) {
+      alert("Failed to create playlist.");
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  const handleCloseCreateSpotifyModal = () => {
+    setIsCreateSpotifyModalOpen(false);
+    setSongsToCreateOnSpotify([]);
+  };
+
+  const handleSubmitCreateSpotifyPlaylist = async (customName) => {
+    const playlistName = customName?.trim?.() || '';
+    if (!playlistName || songsToCreateOnSpotify.length === 0) return;
+
+    const trackUris = songsToCreateOnSpotify.map(song => song.uri);
+
     setIsFetching(true);
     try {
       await createPlaylistAPI(playlistName, trackUris);
       alert("Playlist created successfully on Spotify!");
+      handleCloseCreateSpotifyModal();
     } catch (error) {
       alert("Failed to create playlist.");
     } finally {
@@ -449,6 +479,9 @@ export const AppProvider = ({ children }) => {
       handleSubmitPin,
       isPinModalOpen,
       setIsPinModalOpen,
+      isCreateSpotifyModalOpen,
+      handleCloseCreateSpotifyModal,
+      handleSubmitCreateSpotifyPlaylist,
       displayPlaylistFromHistory,
       handleDeletePinnedPlaylist,
       isRenameModalOpen,
