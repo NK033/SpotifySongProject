@@ -95,7 +95,7 @@ const LiveAgent = ({ onSendMessage }) => {
   const handleArrangePlaylist = async (e) => {
     e.stopPropagation(); 
     if (!status) return;
-    const prompt = `ช่วยจัด Playlist ต่อเนื่องจากเพลง "${status.name}" ของ "${status.artist}" ให้หน่อย เอาแนว "${status.mood_data ? Object.keys(status.mood_data)[0] : 'คล้ายๆ กัน'}"`;
+    const prompt = `ช่วยจัด Playlist ต่อเนื่องจากเพลง "${status.name}" ของ "${status.artist}" ให้หน่อย`;
     try {
         onSendMessage(prompt, 'get_recommendations');
         setIsVisible(false);

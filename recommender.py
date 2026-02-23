@@ -359,7 +359,7 @@ async def get_intelligent_recommendations(
     emotional_profile: dict,
     user_message: str
 ) -> list[dict]:
-    ANALYSIS_LIMIT = 100
+    ANALYSIS_LIMIT = 50
     logging.info(f"--- 🚀 Initializing V34: Micro-Batch Rescue ({ANALYSIS_LIMIT} slots) ---")
 
     user_seed_tracks = await get_seed_tracks(sp_client)

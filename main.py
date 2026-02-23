@@ -645,7 +645,7 @@ async def chat_endpoint(
                     if not artist_tracks:
                         return ChatResponse(
                             response=(
-                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query_raw}'ไม่เจอเลย "
+                                f"ขออภัย ตอนนี้ยังหาเพลงของ '{artist_query_raw}' ไม่เจอเลย "
                                 "ลองพิมพ์ชื่อศิลปินเป็นอังกฤษ หรือระบุชื่อศิลปินอีกคนได้เลย"
                             )
                         )
@@ -677,16 +677,16 @@ async def chat_endpoint(
                         return ChatResponse(
                             response=(
                                 f"เจอเพลงของ '{resolved_artist}' บน Last.fm แล้ว แต่ยังแมตช์เป็นเพลงใน Spotify ไม่ได้ตอนนี้ "
-                                "ลองพิมพ์ชื่อศิลปิน/เพลงที่เฉพาะเจาะจงขึ้นอีกนิด"
+                                "ลองพิมพ์ชื่อศิลปิน/เพลงที่เฉพาะเจาะจงขึ้นอีกนิดนะคะ"
                             )
                         )
 
                     if resolved_artist != artist_query_raw:
                         response_msg = (
-                            f"หา '{artist_query_raw}' ตรง ๆ ไม่เจอ เลยดึงเพลงของศิลปินใกล้เคียง '{resolved_artist}' มาแนะนำให้"
+                            f"หา '{artist_query_raw}' ตรง ๆ ไม่เจอ เลยดึงเพลงของศิลปินใกล้เคียง '{resolved_artist}' มาแนะนำให้ค่ะ"
                         )
                     else:
-                        response_msg = f"ได้เลย นี่คือเพลงของ {resolved_artist} ที่แนะนำให้จากเรา"
+                        response_msg = f"ได้เลยค่ะ นี่คือเพลงของ {resolved_artist} ที่แนะนำให้จากเรา"
 
                     return ChatResponse(response=response_msg, songs_found=songs_from_lastfm_on_spotify)
 
