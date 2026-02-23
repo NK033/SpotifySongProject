@@ -619,7 +619,6 @@ async def chat_endpoint(
             logging.info(f"Top charts strategy={strategy}, target={target_country}, stats={stats}")
 
             chart_songs_on_spotify = []
-<<<<<<< ours
             if strategy in ("dominant_country", "account_country"):
                 chart_tracks_info = await get_chart_top_tracks(target_country)
                 for track_info in chart_tracks_info or []:
@@ -638,7 +637,6 @@ async def chat_endpoint(
             if not chart_songs_on_spotify:
                 return ChatResponse(response="ขออภัยค่ะ ตอนนี้ฉันไม่สามารถดึงข้อมูลเพลงฮิตได้")
 
-=======
             for track_info in chart_tracks_info:
                 query = f"track:{track_info['title']} artist:{track_info['artist']}"
                 spotify_results = await search_spotify_songs(sp_client, query, limit=1)
@@ -647,7 +645,6 @@ async def chat_endpoint(
                     song_payload["is_top_chart"] = True
                     chart_songs_on_spotify.append(song_payload)
             
->>>>>>> theirs
             songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in chart_songs_on_spotify])
             presentation_prompt = f"""
             คุณคือผู้ช่วยแนะนำเพลง
