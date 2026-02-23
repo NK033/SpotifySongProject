@@ -4,6 +4,7 @@ import json
 import re
 import os
 import random
+import random
 import spotipy
 import google.generativeai as genai
 # (*** เพิ่ม 1: Import Tool และ FunctionCallable ***)
@@ -934,7 +935,7 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
         random.shuffle(artist_names)
         for artist_name in artist_names[:3]:
             dynamic_candidates.append({
-                'prompt': f'🎧 หาเพลงสไตล์ {artist_name}',
+                'prompt': f'🎧 หาเพลงของ {artist_name}',
                 'intent': 'get_recommendations'
             })
 
