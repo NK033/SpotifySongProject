@@ -637,17 +637,20 @@ async def chat_endpoint(
                 return ChatResponse(response="ขออภัยค่ะ ตอนนี้ฉันไม่สามารถดึงข้อมูลเพลงฮิตได้")
 
             songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in chart_songs_on_spotify])
-            strategy_note = {
-                "dominant_country": f"ยึดจากประเทศที่คุณฟังเป็นหลัก ({target_country}) เพราะรูปแบบการฟังชัดเจนเกิน 70%",
-                "global": "ยึดจากชาร์ต Global เพราะพฤติกรรมการฟังของคุณกระจายหลายประเทศ",
-                "account_country": f"ยึดจากประเทศบัญชีของคุณ ({target_country}) เพราะยังมีข้อมูลไม่พอ"
-            }.get(strategy, "ยึดจากชาร์ตเพลงฮิต")
+            presentation_prompt = f"""
+            คุณคือผู้ช่วยแนะนำเพลง
+            ช่วยสรุปรายการเพลงฮิตติดชาร์ตด้านล่างให้กระชับและอ่านง่าย (ตอบเป็นภาษาไทย)
 
-            presentation_prompt = (
-                f"นำเสนอรายการเพลงฮิตติดชาร์ตเหล่านี้ในภาษาที่เป็นกันเองและน่าสนใจ (ตอบเป็นภาษาไทย)\n"
-                f"และแจ้งสั้นๆ ว่าใช้เกณฑ์ไหน: {strategy_note}\n\n{songs_for_prompt}"
-            )
+            ข้อกำหนด:
+            1) ยาวไม่เกิน 2 ประโยค
+            2) ห้ามไล่รายชื่อเพลงทีละเพลง
+            3) เน้นภาพรวมของบรรยากาศ/แนวเพลงและเหตุผลสั้น ๆ ว่าทำไมชาร์ตนี้น่าสนใจ
+            4) ใช้น้ำเสียงเป็นกันเอง
 
+            รายการเพลง:
+            {songs_for_prompt}
+            """
+            
             final_response = await groq_client.chat.completions.create(
                 model=FAST_MODEL,
                 messages=[{"role": "user", "content": presentation_prompt}]
