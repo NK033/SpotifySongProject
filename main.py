@@ -547,23 +547,50 @@ async def chat_endpoint(
                     if not artist_tracks:
                         return ChatResponse(
                             response=(
-                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query_raw}' จาก Last.fm ไม่เจอเลย "
+                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query_raw_raw}' จาก Last.fm ไม่เจอเลย "
                                 "ลองพิมพ์ชื่อศิลปินเป็นอังกฤษ หรือระบุชื่อศิลปินอีกคนได้เลยนะคะ"
                             )
                         )
 
-                    top_titles = [t.get("title") for t in artist_tracks if t.get("title")][:8]
-                    title_list = "\n".join([f"{idx+1}. {title}" for idx, title in enumerate(top_titles)])
+                    songs_from_lastfm_on_spotify = []
+                    seen_track_uris = set()
+                    for track_info in artist_tracks:
+                        track_title = (track_info.get("title") or "").strip()
+                        if not track_title:
+                            continue
+
+                        query = f"track:{track_title} artist:{resolved_artist}"
+                        spotify_results = await search_spotify_songs(sp_client, query, limit=1)
+                        if not spotify_results:
+                            fallback_query = f"{track_title} {resolved_artist}"
+                            spotify_results = await search_spotify_songs(sp_client, fallback_query, limit=1)
+
+                        if spotify_results:
+                            song_payload = dict(spotify_results[0])
+                            song_payload["source"] = "lastfm_artist_top_tracks"
+                            if song_payload.get("uri") and song_payload["uri"] not in seen_track_uris:
+                                seen_track_uris.add(song_payload["uri"])
+                                songs_from_lastfm_on_spotify.append(song_payload)
+
+                        if len(songs_from_lastfm_on_spotify) >= 12:
+                            break
+
+                    if not songs_from_lastfm_on_spotify:
+                        return ChatResponse(
+                            response=(
+                                f"เจอเพลงของ '{resolved_artist}' บน Last.fm แล้ว แต่ยังแมตช์เป็นเพลงใน Spotify ไม่ได้ตอนนี้ "
+                                "ลองพิมพ์ชื่อศิลปิน/เพลงที่เฉพาะเจาะจงขึ้นอีกนิดนะคะ"
+                            )
+                        )
 
                     if resolved_artist != artist_query_raw:
                         response_msg = (
-                            f"หาเพลงของ '{artist_query_raw}' โดยตรงไม่เจอ เลยลองจากศิลปินใกล้เคียง '{resolved_artist}' ให้แทนค่ะ\n\n"
-                            f"เพลงแนะนำ:\n{title_list}"
+                            f"หา '{artist_query_raw}' ตรง ๆ ไม่เจอ เลยดึงเพลงของศิลปินใกล้เคียง '{resolved_artist}' มาแนะนำให้ค่ะ"
                         )
                     else:
-                        response_msg = f"ได้เลยค่ะ นี่คือเพลงของ {resolved_artist} ที่แนะนำจาก Last.fm:\n\n{title_list}"
+                        response_msg = f"ได้เลยค่ะ นี่คือเพลงของ {resolved_artist} ที่เราแนะนำ"
 
-                    return ChatResponse(response=response_msg)
+                    return ChatResponse(response=response_msg, songs_found=songs_from_lastfm_on_spotify)
 
                 try:
                     if hasattr(sp_client, "auth_manager") and sp_client.auth_manager:
