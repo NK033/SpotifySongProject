@@ -547,7 +547,7 @@ async def chat_endpoint(
                     if not artist_tracks:
                         return ChatResponse(
                             response=(
-                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query}' จาก Last.fm ไม่เจอเลย "
+                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query_raw}' จาก Last.fm ไม่เจอเลย "
                                 "ลองพิมพ์ชื่อศิลปินเป็นอังกฤษ หรือระบุชื่อศิลปินอีกคนได้เลยนะคะ"
                             )
                         )
@@ -555,9 +555,9 @@ async def chat_endpoint(
                     top_titles = [t.get("title") for t in artist_tracks if t.get("title")][:8]
                     title_list = "\n".join([f"{idx+1}. {title}" for idx, title in enumerate(top_titles)])
 
-                    if resolved_artist != artist_query:
+                    if resolved_artist != artist_query_raw:
                         response_msg = (
-                            f"หาเพลงของ '{artist_query}' โดยตรงไม่เจอ เลยลองจากศิลปินใกล้เคียง '{resolved_artist}' ให้แทนค่ะ\n\n"
+                            f"หาเพลงของ '{artist_query_raw}' โดยตรงไม่เจอ เลยลองจากศิลปินใกล้เคียง '{resolved_artist}' ให้แทนค่ะ\n\n"
                             f"เพลงแนะนำ:\n{title_list}"
                         )
                     else:
