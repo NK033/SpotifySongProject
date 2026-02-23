@@ -602,19 +602,6 @@ async def get_intelligent_recommendations(
     logging.info(f"🎉 Returning {len(final_playlist)} recommendations.")
     return final_playlist
 
-# (*** แก้ไข ***) เพิ่ม Log ในฟังก์ชันนี้
-# ================================================
-# ✅ PATCH: Auto-Fallback Cold Start
-# ================================================
-import logging
-import asyncio
-import random
-from spotify_api import (
-    get_user_top_tracks,
-    get_user_saved_tracks,
-    get_user_recently_played_tracks,
-    get_fallback_recommendations  # ✅ ต้องแน่ใจว่ามี import นี้
-)
 
 async def get_seed_tracks(sp_client: spotipy.Spotify) -> list[dict]:
     """

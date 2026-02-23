@@ -71,6 +71,18 @@ from recommender import (
 Config.validate()
 app = FastAPI()
 
+
+def _sanitize_assistant_text(text: str) -> str:
+    """Normalize assistant tone: Thai polite neutral style, no gendered particles."""
+    if not text:
+        return ""
+    cleaned = text
+    cleaned = re.sub(r"(?<=\S)(?:ครับ|ค่ะ|นะคะ|นะครับ)", "", cleaned)
+    cleaned = re.sub(r"\b(ผม|ฉัน)\b", "", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ ]+\n", "\n", cleaned)
+    return cleaned.strip()
+
 # --- Model ใหม่สำหรับ Request สร้าง Playlist ---   
 class CreatePlaylistRequest(BaseModel):
     playlist_name: str
@@ -808,7 +820,7 @@ async def chat_endpoint(
 
                 if not recommended_songs:
                     logging.error("❌ Recommender returned EMPTY list!")
-                    return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้ (AI คืนค่าว่าง)")
+                    return ChatResponse(response="ขออภัย ตอนนี้ยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้ (AI คืนค่าว่าง)")
                 
                 logging.info(f"✅ Recommender returned {len(recommended_songs)} songs.")
 
@@ -821,18 +833,19 @@ async def chat_endpoint(
                 1. Brief mood summary.
                 2. Invite user to explore.
                 3. Max 3-4 sentences.
-                4. Respond in Thai only.
+                4. Use Thai only for explanation (keep song/artist names in original language).
+                5. Use polite neutral language without gendered particles such as ครับ/ค่ะ and avoid first-person gendered pronouns.
                 """
                 
                 final_response = await groq_client.chat.completions.create(
                     model=FAST_MODEL,
                     messages=[{"role": "user", "content": presentation_prompt}]
                 )
-                return ChatResponse(response=final_response.choices[0].message.content, songs_found=recommended_songs)
+                return ChatResponse(response=_sanitize_assistant_text(final_response.choices[0].message.content), songs_found=recommended_songs)
             
             except Exception as e:
                 logging.error(f"❌ Critical Error in Recommendation Path: {e}", exc_info=True)
-                return ChatResponse(response="เกิดข้อผิดพลาดในการประมวลผลคำแนะนำเพลงค่ะ โปรดลองใหม่อีกครั้ง")
+                return ChatResponse(response="เกิดข้อผิดพลาดในการประมวลผลคำแนะนำเพลง โปรดลองใหม่อีกครั้ง")
             
             finally:
                 logging.info("🏁 Recommendation Flow Finished. Releasing Busy State.")
@@ -842,7 +855,7 @@ async def chat_endpoint(
         # --- Path 2: Top Charts ---
         elif "get_top_charts" in intent:
             if not sp_client:
-                return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะดูชาร์ตได้ 😊")
+                return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะดูชาร์ตได้ 😊")
             logging.info("Executing top charts path.")
 
             user_profile = await get_user_profile(sp_client)
@@ -868,7 +881,7 @@ async def chat_endpoint(
                 strategy = "global"
 
             if not chart_songs_on_spotify:
-                return ChatResponse(response="ขออภัยค่ะ ตอนนี้ฉันไม่สามารถดึงข้อมูลเพลงฮิตได้")
+                return ChatResponse(response="ขออภัย ตอนนี้ยังไม่สามารถดึงข้อมูลเพลงฮิตได้")
 
             for track_info in chart_tracks_info:
                 query = f"track:{track_info['title']} artist:{track_info['artist']}"
@@ -887,7 +900,8 @@ async def chat_endpoint(
             1) ยาวไม่เกิน 2 ประโยค
             2) ห้ามไล่รายชื่อเพลงทีละเพลง
             3) เน้นภาพรวมของบรรยากาศ/แนวเพลงและเหตุผลสั้น ๆ ว่าทำไมชาร์ตนี้น่าสนใจ
-            4) ใช้น้ำเสียงเป็นกันเอง
+            4) ใช้ภาษาไทยสุภาพแบบกลาง
+            5) ไม่ใช้คำลงท้ายแบบระบุเพศ เช่น ครับ/ค่ะ
 
             รายการเพลง:
             {songs_for_prompt}
@@ -897,20 +911,20 @@ async def chat_endpoint(
                 model=FAST_MODEL,
                 messages=[{"role": "user", "content": presentation_prompt}]
             )
-            return ChatResponse(response=final_response.choices[0].message.content, songs_found=chart_songs_on_spotify)
+            return ChatResponse(response=_sanitize_assistant_text(final_response.choices[0].message.content), songs_found=chart_songs_on_spotify)
 
 
         # --- Path 3: Tool Usage ---
         elif "use_a_tool" in intent:
             if not sp_client:
-                return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะใช้เครื่องมือนี้ได้ค่ะ")
+                return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะใช้เครื่องมือนี้ได้")
                 
             logging.info("Executing tool usage path (Groq Version).")
             
             tool_completion = await groq_client.chat.completions.create(
                 model=SMART_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant. Use the available tools to help the user."},
+                    {"role": "system", "content": "You are a helpful Thai music assistant. Reply in polite neutral Thai, avoid gendered particles (ครับ/ค่ะ), and keep song/artist names in original language."},
                     {"role": "user", "content": user_message}
                 ],
                 tools=GROQ_TOOLS,
@@ -929,10 +943,10 @@ async def chat_endpoint(
                             
                     if func_name == "search_spotify_songs":
                         result = await search_spotify_songs(sp_client, **func_args)
-                        return ChatResponse(response="นี่คือผลการค้นหาค่ะ", songs_found=result)
+                        return ChatResponse(response="นี่คือผลการค้นหา", songs_found=result)
                     elif func_name == "create_spotify_playlist":
                         result = await create_spotify_playlist(sp_client, **func_args)
-                        return ChatResponse(response=f"สร้างเพลย์ลิสต์ '{result['name']}' ให้เรียบร้อยแล้วค่ะ", playlist_info=result)
+                        return ChatResponse(response=f"สร้างเพลย์ลิสต์ '{result['name']}' เรียบร้อยแล้ว", playlist_info=result)
                     else:
                         logging.warning(f"AI called an unknown tool: {func_name}. Falling back to chat.")
                         intent = "chat"
@@ -947,16 +961,16 @@ async def chat_endpoint(
             chat_completion = await groq_client.chat.completions.create(
                 model=FAST_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a friendly AI music assistant. Your primary conversational language is Thai. Write all explanations and conversational parts in Thai. However, you MUST use the original language for proper nouns like song titles and artist names. Do not translate these proper nouns."},
+                    {"role": "system", "content": "You are a friendly AI music assistant. Write explanations in polite neutral Thai only, avoid gendered particles (ครับ/ค่ะ) and avoid first-person gendered pronouns. Keep proper nouns like song titles and artist names in their original language."},
                     {"role": "user", "content": user_message}
                 ]
             )
 
             if not chat_completion.choices[0].message.content:
                 logging.error("Groq response was empty.")
-                return ChatResponse(response="ขออภัยค่ะ ตอนนี้ AI ไม่สามารถสร้างคำตอบได้ ลองใหม่อีกครั้งนะคะ")
+                return ChatResponse(response="ขออภัย ตอนนี้ AI ไม่สามารถสร้างคำตอบได้ ลองใหม่อีกครั้ง")
 
-            return ChatResponse(response=chat_completion.choices[0].message.content)
+            return ChatResponse(response=_sanitize_assistant_text(chat_completion.choices[0].message.content))
     
 
     except Exception as e:
@@ -989,26 +1003,26 @@ def get_mood_notification_text(fingerprint: dict):
     sorted_emotions = sorted(fingerprint.items(), key=lambda x: x[1], reverse=True)
     
     if not sorted_emotions:
-        return "🎵 เพลงนี้น่าสนใจดีนะครับ! ฟังเพลินๆ เลย"
+        return "🎵 เพลงนี้น่าสนใจ ฟังเพลินมาก"
 
     dominant_emotion, score = sorted_emotions[0]
     
     # Mapping อารมณ์ -> ข้อความเชิญชวน (Notification Text)
     # ตรงนี้คือ Rule-based ไม่เสีย Token Gemini
     responses = {
-        'joy': "🔥 เพลงนี้เอเนอร์จี้ดีมาก! ดูคุณกำลังแฮปปี้นะ ให้ผมจัด Playlist สายปาร์ตี้ต่อเลยไหม?",
-        'sadness': "💧 เพลงเศร้าจัง... ถ้าอยากระบาย ผมหาเพลงแนวอกหักมารอไว้แล้วนะ หรือจะให้ฮีลใจดี?",
-        'anger': "💢 ดุดันมาก! ถ้าอยากระเบิดอารมณ์ต่อ เดี๋ยวผมจัดสายร็อคหนักๆ ให้ครับ",
+        'joy': "🔥 เพลงนี้เอเนอร์จี้ดีมาก! ดูคุณกำลังแฮปปี้นะ ให้ช่วยจัด Playlist สายปาร์ตี้ต่อไหม?",
+        'sadness': "💧 เพลงเศร้าจัง... ถ้าอยากระบาย มีเพลงแนวอกหักรอไว้แล้ว หรืออยากได้แนวฮีลใจก็ได้",
+        'anger': "💢 ดุดันมาก! ถ้าอยากระเบิดอารมณ์ต่อ จัดสายร็อกหนัก ๆ ต่อให้ได้",
         'love': "💖 อินเลิฟอยู่แน่ๆ เพลงหวานเจี๊ยบเลย สนใจ Playlist เพลงรักเพิ่มไหม?",
-        'excitement': "🤩 จังหวะนี้ต้องไปให้สุด! ผมมีเพลง Hype กว่านี้แนะนำ สนใจไหม?",
-        'neutral': "🌿 ฟังชิลๆ สบายๆ ดีครับ ถ้าอยากฟังยาวๆ เดี๋ยวผมจัด Playlist แนวนี้รอไว้นะ",
-        'admiration': "✨ เพลงนี้ความหมายดีจังครับ ฟังแล้วรู้สึกมีกำลังใจขึ้นมาเลย",
-        'fear': "😨 บรรยากาศดูหลอนๆ นะครับ... ไหวไหม? ให้เปลี่ยนแนวไหมครับ?",
-        'amusement': "😄 เพลงสนุกดีนะครับ! ฟังแล้วอารมณ์ดีเลย"
+        'excitement': "🤩 จังหวะนี้ต้องไปให้สุด! มีเพลง Hype กว่านี้แนะนำ สนใจไหม",
+        'neutral': "🌿 ฟังชิล ๆ สบายมาก ถ้าอยากฟังยาว ๆ จัด Playlist แนวนี้ต่อได้",
+        'admiration': "✨ เพลงนี้ความหมายดีมาก ฟังแล้วรู้สึกมีกำลังใจขึ้น",
+        'fear': "😨 บรรยากาศดูหลอนอยู่ ไหวไหม ถ้าอยากเปลี่ยนแนวบอกได้",
+        'amusement': "😄 เพลงสนุกมาก ฟังแล้วอารมณ์ดี"
     }
     
     # คืนค่าข้อความตามอารมณ์ (ถ้าไม่มีใน list ให้ใช้ default)
-    return responses.get(dominant_emotion, f"เพลงนี้ให้อารมณ์ {dominant_emotion} สินะครับ น่าสนใจมาก! ลองฟังแนวนี้ต่อไหม?")
+    return responses.get(dominant_emotion, f"เพลงนี้ให้อารมณ์ {dominant_emotion} น่าสนใจมาก ลองฟังแนวนี้ต่อไหม")
 
    # 2. API Endpoint หลัก (The Brain)
 @app.get("/api/live-status")
@@ -1087,7 +1101,7 @@ async def get_live_status(sp_client: spotipy.Spotify = Depends(get_spotify_clien
             # กรณีหาเนื้อเพลงไม่เจอ
             return {
                 **track_info,
-                "notification": "เพลงนี้เพราะดีครับ! เสียดายผมแกะเนื้อไม่ออก แต่ถ้าชอบแนวนี้ เดี๋ยวผมจัดให้ตามชื่อศิลปินเลย!"
+                "notification": "เพลงนี้เพราะมาก เสียดายยังแกะเนื้อเพลงไม่ได้ แต่ถ้าชอบแนวนี้ เดี๋ยวจัดต่อให้ตามชื่อศิลปิน"
             }
 
     # 4. สร้างข้อความ Notification
@@ -1170,7 +1184,7 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
             }
         else:
             always_artist_prompt = {
-                'prompt': '🎧 หาเพลงของศิลปินที่ฉันชอบ',
+                'prompt': '🎧 หาเพลงของศิลปินที่ชอบ',
                 'intent': 'get_recommendations'
             }
 
@@ -1197,7 +1211,7 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
             {'prompt': '🌙 หาเพลงฟังก่อนนอน', 'intent': 'get_recommendations'},
             {'prompt': '☕ หาเพลงชิลๆ ระหว่างทำงาน', 'intent': 'get_recommendations'},
             {'prompt': '🚗 หาเพลงเปิดตอนขับรถ', 'intent': 'get_recommendations'},
-            {'prompt': '💪 หาเพลงเพิ่มพลัง', 'intent': 'get_recommendations'}
+            {'prompt': '💪 หาเพลงเพิ่มแรงใจ', 'intent': 'get_recommendations'}
         ]
         dynamic_candidates.extend(fallback_dynamic_pool)
 
