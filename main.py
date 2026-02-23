@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import time
 import logging
+from collections import Counter
 from recommender import get_intelligent_recommendations, get_mood_profile_from_message
 from lastfm_api import get_chart_top_tracks
 from fastapi import BackgroundTasks
@@ -355,6 +356,80 @@ async def summarize_playlist_endpoint(req: SummarizePlaylistRequest, sp_client: 
 # --- Main Chat Endpoint (เวอร์ชันสมบูรณ์) ---
 # (*** นี่คือฟังก์ชันที่แก้ไข ***)
 # --- (*** 2. แก้ไขฟังก์ชันนี้: ***) ---
+
+
+def _infer_track_country_code(track: dict) -> str | None:
+    """Infer likely song country from visible script in title/artist (lightweight heuristic)."""
+    if not isinstance(track, dict):
+        return None
+
+    artists = track.get("artists") or []
+    artist_name = artists[0].get("name", "") if artists and isinstance(artists[0], dict) else ""
+    text = f"{track.get('name', '')} {artist_name}"
+
+    if re.search(r"[฀-๿]", text):
+        return "TH"
+    if re.search(r"[가-힯]", text):
+        return "KR"
+    if re.search(r"[぀-ヿ一-鿿]", text):
+        return "JP"
+    return None
+
+
+async def _resolve_chart_country_strategy(sp_client: spotipy.Spotify, user_country: str) -> tuple[str, str, dict]:
+    """
+    Decide chart source based on user listening history:
+    1) If one inferred country > 70% => use that country chart
+    2) If mixed listening => use global charts
+    3) If no history signal => use account country chart
+    """
+    try:
+        top_tracks = await get_user_top_tracks(sp_client, limit=50)
+    except Exception as e:
+        logging.warning(f"Could not fetch top tracks for chart strategy: {e}")
+        return "account_country", (user_country or "US"), {}
+
+    if not top_tracks:
+        return "account_country", (user_country or "US"), {}
+
+    counts = Counter()
+    for track in top_tracks:
+        cc = _infer_track_country_code(track)
+        if cc:
+            counts.update([cc])
+
+    if not counts:
+        return "account_country", (user_country or "US"), {}
+
+    dominant_country, dominant_count = counts.most_common(1)[0]
+    total_classified = sum(counts.values())
+    dominant_ratio = (dominant_count / total_classified) if total_classified else 0.0
+
+    if dominant_ratio >= 0.70:
+        return "dominant_country", dominant_country, {"counts": dict(counts), "dominant_ratio": dominant_ratio}
+
+    return "global", "GLOBAL", {"counts": dict(counts), "dominant_ratio": dominant_ratio}
+
+
+async def _fetch_global_chart_tracks(sp_client: spotipy.Spotify, limit: int = 20) -> list[dict]:
+    global_queries = [
+        "Global Top Hits",
+        "Top 50 Global",
+        "Viral Hits Global"
+    ]
+    songs = []
+    seen = set()
+    for q in global_queries:
+        results = await search_spotify_songs(sp_client, q, limit=limit)
+        for song in results or []:
+            uri = song.get("uri")
+            if uri and uri not in seen:
+                seen.add(uri)
+                songs.append(song)
+            if len(songs) >= limit:
+                return songs
+    return songs
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(
     chat_request: ChatRequest, 
@@ -535,25 +610,44 @@ async def chat_endpoint(
             if not sp_client:
                 return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะดูชาร์ตได้ 😊")
             logging.info("Executing top charts path.")
-            
+
             user_profile = await get_user_profile(sp_client)
             user_country = user_profile.get("country", "US")
-            
-            chart_tracks_info = await get_chart_top_tracks(user_country) 
-            
-            if not chart_tracks_info:
-                return ChatResponse(response="ขออภัยค่ะ ตอนนี้ฉันไม่สามารถดึงข้อมูลเพลงฮิตได้")
-            
+
+            strategy, target_country, stats = await _resolve_chart_country_strategy(sp_client, user_country)
+            logging.info(f"Top charts strategy={strategy}, target={target_country}, stats={stats}")
+
             chart_songs_on_spotify = []
-            for track_info in chart_tracks_info:
-                query = f"track:{track_info['title']} artist:{track_info['artist']}"
-                spotify_results = await search_spotify_songs(sp_client, query, limit=1)
-                if spotify_results:
-                    chart_songs_on_spotify.append(spotify_results[0])
-            
+            if strategy in ("dominant_country", "account_country"):
+                chart_tracks_info = await get_chart_top_tracks(target_country)
+                for track_info in chart_tracks_info or []:
+                    query = f"track:{track_info['title']} artist:{track_info['artist']}"
+                    spotify_results = await search_spotify_songs(sp_client, query, limit=1)
+                    if spotify_results:
+                        chart_songs_on_spotify.append(spotify_results[0])
+            else:
+                chart_songs_on_spotify = await _fetch_global_chart_tracks(sp_client, limit=20)
+
+            if not chart_songs_on_spotify and strategy != "global":
+                # Fallback to global when country chart retrieval/search fails
+                chart_songs_on_spotify = await _fetch_global_chart_tracks(sp_client, limit=20)
+                strategy = "global"
+
+            if not chart_songs_on_spotify:
+                return ChatResponse(response="ขออภัยค่ะ ตอนนี้ฉันไม่สามารถดึงข้อมูลเพลงฮิตได้")
+
             songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in chart_songs_on_spotify])
-            presentation_prompt = f"นำเสนอรายการเพลงฮิตติดชาร์ตเหล่านี้ในภาษาที่เป็นกันเองและน่าสนใจ (ตอบเป็นภาษาไทย):\n\n{songs_for_prompt}"
-            
+            strategy_note = {
+                "dominant_country": f"ยึดจากประเทศที่คุณฟังเป็นหลัก ({target_country}) เพราะรูปแบบการฟังชัดเจนเกิน 70%",
+                "global": "ยึดจากชาร์ต Global เพราะพฤติกรรมการฟังของคุณกระจายหลายประเทศ",
+                "account_country": f"ยึดจากประเทศบัญชีของคุณ ({target_country}) เพราะยังมีข้อมูลไม่พอ"
+            }.get(strategy, "ยึดจากชาร์ตเพลงฮิต")
+
+            presentation_prompt = (
+                f"นำเสนอรายการเพลงฮิตติดชาร์ตเหล่านี้ในภาษาที่เป็นกันเองและน่าสนใจ (ตอบเป็นภาษาไทย)\n"
+                f"และแจ้งสั้นๆ ว่าใช้เกณฑ์ไหน: {strategy_note}\n\n{songs_for_prompt}"
+            )
+
             final_response = await groq_client.chat.completions.create(
                 model=FAST_MODEL,
                 messages=[{"role": "user", "content": presentation_prompt}]
