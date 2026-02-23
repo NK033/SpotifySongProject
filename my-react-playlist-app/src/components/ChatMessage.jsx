@@ -3,7 +3,7 @@ import React from 'react';
 import SongCard from './SongCard';
 
 function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize, onCreatePlaylist }) {
-  const { isUser, message, songs, recommendationText } = item;
+  const { isUser, message, songs, recommendationText, playlistName } = item;
 
   return (
     <div className={`flex items-start mb-4 ${isUser ? 'justify-end' : ''}`}>
@@ -45,7 +45,7 @@ function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize, onCr
               </button>
 
               <button 
-                onClick={() => onCreatePlaylist(songs)} 
+                onClick={() => onCreatePlaylist(songs, playlistName)} 
                 className="create-playlist-btn text-xs py-1.5 px-3 rounded-full bg-green-600 hover:bg-green-700 text-white transition flex items-center"
               >
                 <i className="fab fa-spotify mr-1.5"></i> Create on Spotify

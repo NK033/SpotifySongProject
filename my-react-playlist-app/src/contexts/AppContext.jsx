@@ -29,6 +29,17 @@ const WELCOME_MESSAGE = [
   }
 ];
 
+const inferPlaylistName = (message = '') => {
+  if (!message) return '';
+  const boldMatch = message.match(/\*\*([^*]+)\*\*/);
+  if (boldMatch && boldMatch[1]) return boldMatch[1].trim();
+
+  const lineMatch = message.match(/playlist\s*[:：-]\s*(.+)/i);
+  if (lineMatch && lineMatch[1]) return lineMatch[1].trim();
+
+  return '';
+};
+
 export const AppProvider = ({ children }) => {
   // --- States ---
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -183,12 +194,15 @@ export const AppProvider = ({ children }) => {
       const aiMsgId = `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const responseText = data.response || "จัดให้ตามคำขอครับ! (AI ไม่ได้ส่งข้อความตอบกลับ)";
 
+      const playlistNameFromWeb = data.playlist_name || inferPlaylistName(responseText);
+
       const newAiMsg = { 
         id: aiMsgId, 
         isUser: false, 
         message: responseText, 
         songs: data.songs_found || [],
-        recommendationText: responseText 
+        recommendationText: responseText,
+        playlistName: playlistNameFromWeb
       };
       setChatHistory(prev => [...prev, newAiMsg]);
 
@@ -203,13 +217,17 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  const handleCreatePlaylist = async (songs = []) => {
+  const handleCreatePlaylist = async (songs = [], playlistNameFromWeb = '') => {
     const targetSongs = (Array.isArray(songs) && songs.length > 0) ? songs : currentRecommendedSongs;
     if (!targetSongs || targetSongs.length === 0) return;
     const trackUris = targetSongs.map(song => song.uri);
+    const playlistName = playlistNameFromWeb && playlistNameFromWeb.trim()
+      ? playlistNameFromWeb.trim()
+      : `AI Playlist ${new Date().toLocaleString()}`;
+      
     setIsFetching(true);
     try {
-      await createPlaylistAPI("AI Recommended Playlist", trackUris);
+      await createPlaylistAPI(playlistName, trackUris);
       alert("Playlist created successfully on Spotify!");
     } catch (error) {
       alert("Failed to create playlist.");
@@ -280,7 +298,8 @@ export const AppProvider = ({ children }) => {
       isUser: false,
       message: `นี่คือ Playlist ที่คุณปักหมุดไว้: **${playlist.name}**\n${playlist.recommendation_text || ''}`,
       songs: songs, 
-      recommendationText: playlist.recommendation_text
+      recommendationText: playlist.recommendation_text,
+      playlistName: playlist.name
     };
     
     setChatHistory(prev => [...prev, aiMsg]);
