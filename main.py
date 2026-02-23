@@ -431,6 +431,104 @@ async def _fetch_global_chart_tracks(sp_client: spotipy.Spotify, limit: int = 20
                 return songs
     return songs
 
+
+def _blend_emotion_profiles(primary: dict, secondary: dict, primary_weight: float, secondary_weight: float) -> dict:
+    keys = set((primary or {}).keys()) | set((secondary or {}).keys())
+    blended = {}
+    for k in keys:
+        pv = float((primary or {}).get(k, 0.0) or 0.0)
+        sv = float((secondary or {}).get(k, 0.0) or 0.0)
+        blended[k] = (primary_weight * pv) + (secondary_weight * sv)
+    total = sum(blended.values())
+    if total > 0:
+        for k in blended:
+            blended[k] /= total
+    return blended
+
+
+def _extract_live_seed_request(user_message: str) -> tuple[str | None, str | None]:
+    patterns = [
+        r'ต่อเนื่องจากเพลง\s+"([^"]+)"\s+ของ\s+"([^"]+)"',
+        r"ต่อเนื่องจากเพลง\s+'([^']+)'\s+ของ\s+'([^']+)'",
+    ]
+    for pat in patterns:
+        m = re.search(pat, user_message, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    return None, None
+
+
+async def _inject_same_artist_tracks(
+    sp_client: spotipy.Spotify,
+    recommended_songs: list[dict],
+    anchor_artist: str,
+    anchor_track_title: str,
+    target_profile: dict,
+    mix_ratio: float = 0.4,
+) -> list[dict]:
+    if not recommended_songs or not anchor_artist:
+        return recommended_songs
+
+    desired_artist_count = max(1, int(len(recommended_songs) * mix_ratio))
+    artist_candidates = await search_spotify_songs(sp_client, f'artist:"{anchor_artist}"', limit=30)
+
+    existing_uris = {t.get('uri') for t in recommended_songs if t.get('uri')}
+    candidate_pool = []
+    for t in artist_candidates or []:
+        uri = t.get('uri')
+        if not uri or uri in existing_uris:
+            continue
+        if (t.get('name') or '').strip().lower() == (anchor_track_title or '').strip().lower():
+            continue
+
+        score = 0.0
+        try:
+            cached = await database.get_song_analysis_from_db(uri)
+            moods = (cached or {}).get('predicted_moods') or {}
+            if moods and target_profile:
+                keys = sorted(set(moods.keys()) | set(target_profile.keys()))
+                v1 = [float(moods.get(k, 0.0) or 0.0) for k in keys]
+                v2 = [float(target_profile.get(k, 0.0) or 0.0) for k in keys]
+                dot = sum(a * b for a, b in zip(v1, v2))
+                n1 = sum(a * a for a in v1) ** 0.5
+                n2 = sum(b * b for b in v2) ** 0.5
+                score = (dot / (n1 * n2)) if n1 and n2 else 0.0
+        except Exception:
+            score = 0.0
+
+        if score >= 0.35:
+            candidate_pool.append((score, t))
+
+    candidate_pool.sort(key=lambda x: x[0], reverse=True)
+    artist_tracks = [t for _, t in candidate_pool[:desired_artist_count]]
+    if not artist_tracks:
+        return recommended_songs
+
+    base_count = max(1, len(recommended_songs) - len(artist_tracks))
+    base_tracks = recommended_songs[:base_count]
+    mixed = []
+    ai = 0
+    bi = 0
+    while bi < len(base_tracks) or ai < len(artist_tracks):
+        if bi < len(base_tracks):
+            mixed.append(base_tracks[bi])
+            bi += 1
+        if bi < len(base_tracks):
+            mixed.append(base_tracks[bi])
+            bi += 1
+        if ai < len(artist_tracks):
+            mixed.append(artist_tracks[ai])
+            ai += 1
+
+    seen = set()
+    deduped = []
+    for t in mixed:
+        uri = t.get('uri')
+        if uri and uri not in seen:
+            seen.add(uri)
+            deduped.append(t)
+    return deduped[:15]
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(
     chat_request: ChatRequest, 
@@ -480,7 +578,7 @@ async def chat_endpoint(
         if "get_recommendations" in intent:
             logging.info("🚀 Starting Recommendation Flow...")
             if not sp_client:
-                return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อนนะคะ ถึงจะแนะนำเพลงให้ได้ 😊")
+                return ChatResponse(response="คุณต้องเข้าสู่ระบบ Spotify ก่อน ถึงจะแนะนำเพลงให้ได้ 😊")
             
             user_profile = await get_user_profile(sp_client)
             user_id = user_profile.get('id')
@@ -547,8 +645,8 @@ async def chat_endpoint(
                     if not artist_tracks:
                         return ChatResponse(
                             response=(
-                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query_raw_raw}' จาก Last.fm ไม่เจอเลย "
-                                "ลองพิมพ์ชื่อศิลปินเป็นอังกฤษ หรือระบุชื่อศิลปินอีกคนได้เลยนะคะ"
+                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query_raw}'ไม่เจอเลย "
+                                "ลองพิมพ์ชื่อศิลปินเป็นอังกฤษ หรือระบุชื่อศิลปินอีกคนได้เลย"
                             )
                         )
 
@@ -579,16 +677,16 @@ async def chat_endpoint(
                         return ChatResponse(
                             response=(
                                 f"เจอเพลงของ '{resolved_artist}' บน Last.fm แล้ว แต่ยังแมตช์เป็นเพลงใน Spotify ไม่ได้ตอนนี้ "
-                                "ลองพิมพ์ชื่อศิลปิน/เพลงที่เฉพาะเจาะจงขึ้นอีกนิดนะคะ"
+                                "ลองพิมพ์ชื่อศิลปิน/เพลงที่เฉพาะเจาะจงขึ้นอีกนิด"
                             )
                         )
 
                     if resolved_artist != artist_query_raw:
                         response_msg = (
-                            f"หา '{artist_query_raw}' ตรง ๆ ไม่เจอ เลยดึงเพลงของศิลปินใกล้เคียง '{resolved_artist}' มาแนะนำให้ค่ะ"
+                            f"หา '{artist_query_raw}' ตรง ๆ ไม่เจอ เลยดึงเพลงของศิลปินใกล้เคียง '{resolved_artist}' มาแนะนำให้"
                         )
                     else:
-                        response_msg = f"ได้เลยค่ะ นี่คือเพลงของ {resolved_artist} ที่เราแนะนำ"
+                        response_msg = f"ได้เลย นี่คือเพลงของ {resolved_artist} ที่แนะนำให้จากเรา"
 
                     return ChatResponse(response=response_msg, songs_found=songs_from_lastfm_on_spotify)
 
@@ -655,28 +753,58 @@ async def chat_endpoint(
 
                 emotional_profile = {}
                 intent_mood = {"is_specific": False, "emotions": [], "confidence": 0.0}
+                live_seed_title, live_seed_artist = _extract_live_seed_request(user_message)
 
-                # Always ask the router for non-artist requests; fall back to PURE taste if confidence is low
-                intent_mood = await analyze_mood_intent_from_message_groq(user_message)
-                intent_top = [(e.get("label"), e.get("weight")) for e in (intent_mood.get("emotions") or [])]
-                logging.info(f"🎭 Intent Mood (top3): {intent_top} | is_specific={intent_mood.get('is_specific')} | conf={intent_mood.get('confidence')}")
-                logging.info(f"🧠 User Taste (top): {_topk(historical_profile, 5)}")
+                if live_seed_title and live_seed_artist:
+                    logging.info(f"🎛️ Live continuation request detected: seed='{live_seed_title}' artist='{live_seed_artist}'")
+                    seed_results = await search_spotify_songs(
+                        sp_client,
+                        f'track:{live_seed_title} artist:{live_seed_artist}',
+                        limit=1
+                    )
+                    if seed_results:
+                        seed_track = seed_results[0]
+                        seed_analysis = await get_song_analysis_details_groq(sp_client, seed_track['uri'])
+                        seed_moods = (seed_analysis or {}).get('predicted_moods') or {}
+                        if seed_moods:
+                            emotional_profile = _blend_emotion_profiles(seed_moods, historical_profile, 0.8, 0.2)
+                            logging.info(f"✅ Live seed mood blend applied (80/20). seed_top={_topk(seed_moods, 3)}")
+                        else:
+                            logging.warning("Live seed found but mood analysis unavailable. Falling back to intent analysis.")
+                    else:
+                        logging.warning("Live continuation seed track not found on Spotify. Falling back to intent analysis.")
 
-                if intent_mood.get("is_specific") and float(intent_mood.get("confidence", 0.0) or 0.0) >= 0.55:
-                    emotional_profile = emotions_top3_to_profile(intent_mood.get("emotions") or [])
-                    logging.info("Specific request detected (LLM). Using blended mood/taste downstream (80/20).")
-                else:
-                    logging.info("Generic request detected (LLM). Using PURE User Taste Profile.")
+                if not emotional_profile:
+                    # Always ask the router for non-live-seed requests; fall back to PURE taste if confidence is low
+                    intent_mood = await analyze_mood_intent_from_message_groq(user_message)
+                    intent_top = [(e.get("label"), e.get("weight")) for e in (intent_mood.get("emotions") or [])]
+                    logging.info(f"🎭 Intent Mood (top3): {intent_top} | is_specific={intent_mood.get('is_specific')} | conf={intent_mood.get('confidence')}")
+                    logging.info(f"🧠 User Taste (top): {_topk(historical_profile, 5)}")
 
+                    if intent_mood.get("is_specific") and float(intent_mood.get("confidence", 0.0) or 0.0) >= 0.55:
+                        emotional_profile = emotions_top3_to_profile(intent_mood.get("emotions") or [])
+                        logging.info("Specific request detected (LLM). Using blended mood/taste downstream (80/20).")
+                    else:
+                        logging.info("Generic request detected (LLM). Using PURE User Taste Profile.")
 
                 # --- CALL RECOMMENDER ---                # --- CALL RECOMMENDER ---
                 logging.info("Calling get_intelligent_recommendations...")
                 recommended_songs = await get_intelligent_recommendations(
-                    sp_client, user_id, 
-                    historical_profile, 
-                    emotional_profile, 
+                    sp_client, user_id,
+                    historical_profile,
+                    emotional_profile,
                     user_message
                 )
+
+                if live_seed_title and live_seed_artist and recommended_songs:
+                    recommended_songs = await _inject_same_artist_tracks(
+                        sp_client,
+                        recommended_songs,
+                        anchor_artist=live_seed_artist,
+                        anchor_track_title=live_seed_title,
+                        target_profile=emotional_profile,
+                        mix_ratio=0.4,
+                    )
 
                 if not recommended_songs:
                     logging.error("❌ Recommender returned EMPTY list!")
