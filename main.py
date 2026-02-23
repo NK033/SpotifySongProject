@@ -21,7 +21,7 @@ import time
 import logging
 from collections import Counter
 from recommender import get_intelligent_recommendations, get_mood_profile_from_message
-from lastfm_api import get_chart_top_tracks
+from lastfm_api import get_chart_top_tracks, get_artist_top_tracks_lastfm, get_similar_artists_lastfm
 from fastapi import BackgroundTasks
 from recommender import get_intelligent_recommendations, update_user_profile_background
 from pydantic import BaseModel
@@ -487,6 +487,84 @@ async def chat_endpoint(
 
             IS_SYSTEM_BUSY = True # <--- Set BUSY
             try:
+                # Artist-only request path (Last.fm only; avoid Spotify search endpoint)
+                artist_only_match = re.search(r"หาเพลงของ\s+(.+)", user_message, flags=re.IGNORECASE)
+                if artist_only_match:
+                    artist_query_raw = artist_only_match.group(1).strip()
+                    artist_query_basic = re.sub(r"^(ศิลปิน|artist)\s+", "", artist_query_raw, flags=re.IGNORECASE).strip(" '\".,!?()[]{}")
+
+                    artist_query_llm = artist_query_basic
+                    try:
+                        normalize_prompt = (
+                            "Normalize this artist name so it can be searched on Last.fm.\n"
+                            "Keep only the artist name, no extra words.\n"
+                            "Prefer official Latin/English name if commonly used.\n"
+                            "Return JSON only in this exact format: {\"artist\":\"...\"}\n\n"
+                            f"Input: {artist_query_raw}"
+                        )
+                        normalize_completion = await groq_client.chat.completions.create(
+                            model=FAST_MODEL,
+                            messages=[{"role": "user", "content": normalize_prompt}]
+                        )
+                        normalize_text = (normalize_completion.choices[0].message.content or "").strip()
+                        json_match = re.search(r"\{.*\}", normalize_text, flags=re.DOTALL)
+                        if json_match:
+                            parsed = json.loads(json_match.group(0))
+                            normalized = (parsed.get("artist") or "").strip()
+                            if normalized:
+                                artist_query_llm = normalized
+                    except Exception as e:
+                        logging.warning(f"Artist normalization via LLM failed, fallback to basic clean: {e}")
+
+                    lookup_candidates = []
+                    for q in [artist_query_llm, artist_query_basic, artist_query_raw]:
+                        q = (q or "").strip()
+                        if q and q not in lookup_candidates:
+                            lookup_candidates.append(q)
+
+                    logging.info(f"🎯 Artist-only request detected: raw='{artist_query_raw}' | candidates={lookup_candidates}")
+
+                    artist_tracks = []
+                    resolved_artist = lookup_candidates[0] if lookup_candidates else artist_query_raw
+                    query_used = resolved_artist
+                    for q in lookup_candidates:
+                        candidate_tracks = await get_artist_top_tracks_lastfm(q, limit=12)
+                        if candidate_tracks:
+                            artist_tracks = candidate_tracks
+                            resolved_artist = q
+                            query_used = q
+                            break
+
+                    if not artist_tracks:
+                        similar_artists = await get_similar_artists_lastfm(query_used, limit=5)
+                        for candidate_artist in similar_artists:
+                            candidate_tracks = await get_artist_top_tracks_lastfm(candidate_artist, limit=12)
+                            if candidate_tracks:
+                                artist_tracks = candidate_tracks
+                                resolved_artist = candidate_artist
+                                break
+
+                    if not artist_tracks:
+                        return ChatResponse(
+                            response=(
+                                f"ขออภัยค่ะ ตอนนี้ยังหาเพลงของ '{artist_query}' จาก Last.fm ไม่เจอเลย "
+                                "ลองพิมพ์ชื่อศิลปินเป็นอังกฤษ หรือระบุชื่อศิลปินอีกคนได้เลยนะคะ"
+                            )
+                        )
+
+                    top_titles = [t.get("title") for t in artist_tracks if t.get("title")][:8]
+                    title_list = "\n".join([f"{idx+1}. {title}" for idx, title in enumerate(top_titles)])
+
+                    if resolved_artist != artist_query:
+                        response_msg = (
+                            f"หาเพลงของ '{artist_query}' โดยตรงไม่เจอ เลยลองจากศิลปินใกล้เคียง '{resolved_artist}' ให้แทนค่ะ\n\n"
+                            f"เพลงแนะนำ:\n{title_list}"
+                        )
+                    else:
+                        response_msg = f"ได้เลยค่ะ นี่คือเพลงของ {resolved_artist} ที่แนะนำจาก Last.fm:\n\n{title_list}"
+
+                    return ChatResponse(response=response_msg)
+
                 try:
                     if hasattr(sp_client, "auth_manager") and sp_client.auth_manager:
                         token_info_for_bg = sp_client.auth_manager.cache_handler.get_cached_token()
