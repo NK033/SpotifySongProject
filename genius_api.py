@@ -7,6 +7,56 @@ from config import Config
 
 BASE_URL = "https://api.genius.com"
 
+
+def _strip_genius_header_noise(text: str) -> str:
+    """
+    Remove common non-lyric headers that are embedded in Genius page text.
+    """
+    if not text:
+        return ""
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    cleaned_lines = []
+    header_phase = True
+
+    for line in lines:
+        is_short_latin_label = bool(re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ'’\- ]{1,30}", line)) and len(line.split()) <= 3
+
+        # Remove section labels we never want in final lyrics
+        if re.fullmatch(r"\[.*?\]", line):
+            continue
+
+        if header_phase:
+            normalized = line.casefold()
+            looks_like_header = (
+                re.search(r"\bcontributors?\b", line, flags=re.IGNORECASE)
+                or re.search(r"\btranslations?\b", line, flags=re.IGNORECASE)
+                or re.search(r"\bromanization\b", line, flags=re.IGNORECASE)
+                or re.search(r"\blyrics\b", line, flags=re.IGNORECASE)
+                or normalized in {"english", "read more"}
+                or (len(line.split()) >= 6 and re.search(r"\b(is|was|are|were)\b", line, flags=re.IGNORECASE))
+                or is_short_latin_label  # usually language pills like "Türkçe"
+            )
+
+            # Skip description / editorial text before real lyrics begin
+            if looks_like_header:
+                continue
+
+            header_phase = False
+
+        cleaned_lines.append(line)
+
+    cleaned_text = "\n".join(cleaned_lines)
+
+    # Drop accidental remnants such as "123 Contributors" that may appear mid-text.
+    cleaned_text = re.sub(r"(?im)^\s*\d+\s+contributors?\s*$", "", cleaned_text)
+    cleaned_text = re.sub(r"(?im)^\s*(translations?|romanization|read more|english)\s*$", "", cleaned_text)
+    cleaned_text = re.sub(r"(?im)^\s*.*\blyrics\b\s*$", "", cleaned_text)
+
+    # Normalize blank lines after removals
+    cleaned_text = "\n".join(line for line in cleaned_text.splitlines() if line.strip())
+    return cleaned_text.strip()
+
 # --- (ใหม่) ฟังก์ชันสำหรับทำความสะอาดชื่อเพลง ---
 def _clean_search_query(title: str) -> str:
     """ลบส่วนเกินในชื่อเพลง เช่น (with...), - From..., etc."""
@@ -88,20 +138,27 @@ async def get_lyrics_by_id(song_id: int) -> str | None:
             html_response.raise_for_status()
             
             soup = BeautifulSoup(html_response.text, "html.parser")
+
+            # Genius รุ่นใหม่: เนื้อเพลงอยู่ในหลาย div ที่มี data-lyrics-container="true"
+            lyrics_blocks = soup.select('div[data-lyrics-container="true"]')
+            if lyrics_blocks:
+                text = "\n".join(block.get_text(separator="\n", strip=True) for block in lyrics_blocks)
+                text = _strip_genius_header_noise(text)
+                if text:
+                    return text
+
+            # Fallback โครงสร้างคลาสเดิม
             lyrics_container = soup.find("div", class_=lambda value: value and value.startswith("Lyrics__Container"))
 
             if not lyrics_container:
                 # Fallback สำหรับโครงสร้างเว็บแบบเก่า
                 lyrics_container = soup.find("div", class_="lyrics")
-            
+
             if lyrics_container:
-                # ใช้ .get_text(separator='\n') เพื่อรักษาระยะห่างระหว่างบรรทัด
                 text = lyrics_container.get_text(separator="\n").strip()
-                # ลบ [Chorus], [Verse] etc.
-                text = re.sub(r'\[.*?\]', '', text)
-                # ลบบรรทัดว่างที่อาจเกิดขึ้นหลังจากการลบ
-                text = "\n".join(line for line in text.split('\n') if line.strip())
-                return text.strip()
+                text = _strip_genius_header_noise(text)
+                if text:
+                    return text
             
             return None
             
