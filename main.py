@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import os
+import random
 import spotipy
 import google.generativeai as genai
 # (*** เพิ่ม 1: Import Tool และ FunctionCallable ***)
@@ -618,6 +619,7 @@ async def chat_endpoint(
             logging.info(f"Top charts strategy={strategy}, target={target_country}, stats={stats}")
 
             chart_songs_on_spotify = []
+<<<<<<< ours
             if strategy in ("dominant_country", "account_country"):
                 chart_tracks_info = await get_chart_top_tracks(target_country)
                 for track_info in chart_tracks_info or []:
@@ -636,6 +638,16 @@ async def chat_endpoint(
             if not chart_songs_on_spotify:
                 return ChatResponse(response="ขออภัยค่ะ ตอนนี้ฉันไม่สามารถดึงข้อมูลเพลงฮิตได้")
 
+=======
+            for track_info in chart_tracks_info:
+                query = f"track:{track_info['title']} artist:{track_info['artist']}"
+                spotify_results = await search_spotify_songs(sp_client, query, limit=1)
+                if spotify_results:
+                    song_payload = dict(spotify_results[0])
+                    song_payload["is_top_chart"] = True
+                    chart_songs_on_spotify.append(song_payload)
+            
+>>>>>>> theirs
             songs_for_prompt = "\n".join([f"- {s['name']} by {s['artists'][0]['name']}" for s in chart_songs_on_spotify])
             presentation_prompt = f"""
             คุณคือผู้ช่วยแนะนำเพลง
@@ -888,41 +900,51 @@ async def update_pinned_playlist_endpoint(pin_id: int, req: UpdatePlaylistReques
 # --- (*** แก้ไข: Endpoint นี้ต้องคืนค่าเป็น Object ***) ---
 @app.get("/suggested_prompts")
 async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    # fixed prompts ที่ต้องมีเสมอ
+    fixed_prompts = [
+        {'prompt': '🎵 แนะนำเพลงส่วนตัวให้หน่อย', 'intent': 'get_recommendations'},
+        {'prompt': '📈 ขอเพลงฮิตติดชาร์ต', 'intent': 'get_top_charts'}
+    ]
+
+    # fallback สำหรับผู้ใช้ที่ยังไม่ล็อกอิน
+    guest_pool = [
+        {'prompt': '🎧 หาเพลงเศร้าๆ', 'intent': 'get_recommendations'},
+        {'prompt': '🏃‍♂️ หาเพลงสำหรับวิ่ง', 'intent': 'get_recommendations'},
+        {'prompt': '🔥 หาเพลงมันส์ๆ', 'intent': 'get_recommendations'},
+        {'prompt': '✨ หาเพลงให้กำลังใจ', 'intent': 'get_recommendations'}
+    ]
+
     try:
         user_profile = await get_user_profile(sp_client)
         user_id = user_profile.get('id')
     except HTTPException:
-        # ถ้ายังไม่ล็อกอิน ให้ส่งค่า default กลับไป
-        default_prompts = [
-            {'prompt': '🎵 แนะนำเพลงสบายๆ', 'intent': 'get_recommendations'},
-            {'prompt': '📈 ขอเพลงฮิตติดชาร์ต', 'intent': 'get_top_charts'},
-            {'prompt': '🎧 หาเพลงเศร้าๆ', 'intent': 'get_recommendations'},
-            {'prompt': '🏃‍♂️ หาเพลงสำหรับวิ่ง', 'intent': 'get_recommendations'}
-        ]
-        return JSONResponse({"prompts": default_prompts})
+        return JSONResponse({"prompts": fixed_prompts + random.sample(guest_pool, k=2)})
 
-    prompts = []
-    
-    # 1. Prompt แนะนำเพลงส่วนตัว (ต้องมีเสมอ)
-    prompts.append({'prompt': '🎵 แนะนำเพลงส่วนตัวให้หน่อย', 'intent': 'get_recommendations'})
-    prompts.append({'prompt': '📈 ขอเพลงฮิตติดชาร์ต', 'intent': 'get_top_charts'})
+    dynamic_candidates = []
 
     try:
-        # 2. Prompt จากศิลปินโปรด
-        top_tracks = await get_user_top_tracks(sp_client, limit=1)
-        if top_tracks and top_tracks[0]['artists']:
-            top_artist_name = top_tracks[0]['artists'][0]['name']
-            # (เพิ่ม intent ให้ path นี้ด้วย)
-            prompts.append({'prompt': f'🎧 หาเพลงสไตล์ {top_artist_name}', 'intent': 'get_recommendations'})
+        # 1) สุ่มศิลปินจาก seed/top tracks ของผู้ใช้
+        top_tracks = await get_user_top_tracks(sp_client, limit=20)
+        artist_names = []
+        seen = set()
+        for track in top_tracks or []:
+            for artist in track.get('artists', []):
+                name = artist.get('name')
+                if name and name not in seen:
+                    seen.add(name)
+                    artist_names.append(name)
 
-        # 3. Prompt จากอารมณ์โปรด (จาก Mood Profile)
+        random.shuffle(artist_names)
+        for artist_name in artist_names[:3]:
+            dynamic_candidates.append({
+                'prompt': f'🎧 หาเพลงสไตล์ {artist_name}',
+                'intent': 'get_recommendations'
+            })
+
+        # 2) สุ่มอารมณ์จากอันดับ 1-3 ของ mood profile (ไม่นับ neutral)
         mood_profile = await get_user_mood_profile(user_id)
         if mood_profile:
-            # ค้นหาอารมณ์ที่มีค่าน้ำหนักสูงสุด (ไม่เอา neutral)
-            mood_profile.pop('neutral', None) 
-            top_mood = max(mood_profile, key=mood_profile.get)
-            
-            # แปลงชื่ออารมณ์เป็น Prompt ภาษาไทย
+            filtered = {k: v for k, v in mood_profile.items() if k != 'neutral'}
             mood_map = {
                 'joy': {'prompt': '🎉 หาเพลงสนุกๆ', 'intent': 'get_recommendations'},
                 'excitement': {'prompt': '🔥 หาเพลงมันส์ๆ', 'intent': 'get_recommendations'},
@@ -932,21 +954,46 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
                 'fear': {'prompt': '😱 หาเพลงแนวลึกลับ', 'intent': 'get_recommendations'},
                 'optimism': {'prompt': '✨ หาเพลงให้กำลังใจ', 'intent': 'get_recommendations'}
             }
-            if top_mood in mood_map:
-                prompts.append(mood_map[top_mood])
-            else:
-                prompts.append({'prompt': '💖 หาเพลงตามอารมณ์ฉัน', 'intent': 'get_recommendations'})
 
-        # ทำให้เหลือไม่เกิน 4 prompts
-        return JSONResponse({"prompts": prompts[:4]})
-        
+            ranked_moods = sorted(filtered.items(), key=lambda x: x[1], reverse=True)[:3]
+            mood_prompts = [mood_map[m] for m, _ in ranked_moods if m in mood_map]
+            random.shuffle(mood_prompts)
+            dynamic_candidates.extend(mood_prompts)
+
+        # 3) ถ้าข้อมูลผู้ใช้ยังน้อย เติม pool กลางให้สุ่มได้ตลอด
+        fallback_dynamic_pool = [
+            {'prompt': '🌙 หาเพลงฟังก่อนนอน', 'intent': 'get_recommendations'},
+            {'prompt': '☕ หาเพลงชิลๆ ระหว่างทำงาน', 'intent': 'get_recommendations'},
+            {'prompt': '🚗 หาเพลงเปิดตอนขับรถ', 'intent': 'get_recommendations'},
+            {'prompt': '💪 หาเพลงเพิ่มพลัง', 'intent': 'get_recommendations'}
+        ]
+        dynamic_candidates.extend(fallback_dynamic_pool)
+
+        # dedupe + shuffle เพื่อให้ 2 ตัวท้ายสลับกันได้
+        unique_candidates = []
+        used = set()
+        for item in dynamic_candidates:
+            label = item.get('prompt')
+            if label and label not in used:
+                used.add(label)
+                unique_candidates.append(item)
+
+        random.shuffle(unique_candidates)
+        selected_dynamic = unique_candidates[:2]
+
+        # กันเคสเหลือไม่ครบ
+        if len(selected_dynamic) < 2:
+            for item in guest_pool:
+                if item['prompt'] not in {p['prompt'] for p in selected_dynamic}:
+                    selected_dynamic.append(item)
+                if len(selected_dynamic) == 2:
+                    break
+
+        return JSONResponse({"prompts": fixed_prompts + selected_dynamic})
+
     except Exception as e:
         logging.error(f"Error generating dynamic prompts: {e}")
-        # ถ้าเกิด Error ระหว่างหาข้อมูลส่วนตัว ก็ส่ง default กลับไป
-        return JSONResponse({"prompts": [ 
-            {'prompt': '🎵 แนะนำเพลงส่วนตัวให้หน่อย', 'intent': 'get_recommendations'}, 
-            {'prompt': '📈 ขอเพลงฮิตติดชาร์ต', 'intent': 'get_top_charts'} 
-        ]})
-    
+        return JSONResponse({"prompts": fixed_prompts + random.sample(guest_pool, k=2)})
+
 
 app.mount("/", StaticFiles(directory="my-react-playlist-app/dist", html=True), name="static-react-app")
