@@ -16,13 +16,13 @@ function SongDetailModal({ song, analysis, onClose }) {
           content = analysis;
       } else if (typeof analysis === 'object') {
           // ✅ เรียงลำดับความสำคัญ: ลองหา groq_analysis ก่อนเพื่อนเลย
-          content = analysis.groq_analysis || 
-                    analysis.gemini_analysis || 
-                    analysis.analysis || 
-                    analysis.details || 
-                    analysis.message || 
-                    // ถ้าหาไม่เจอจริงๆ ค่อยแปลงเป็น JSON string (กันเหนียว)
-                    JSON.stringify(analysis);
+          content = analysis.Details ||
+                    analysis.groq_analysis ||
+                    analysis.gemini_analysis ||
+                    analysis.analysis ||
+                    analysis.details ||
+                    analysis.message ||
+                    'ไม่พบรายละเอียดที่อ่านได้สำหรับเพลงนี้';
       }
   }
 
