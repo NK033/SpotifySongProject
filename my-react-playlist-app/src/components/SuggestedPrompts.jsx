@@ -28,7 +28,7 @@ function SuggestedPrompts({ prompts, onPromptClick }) {
             <button
               key={`${label}-${index}`}
               className="suggested-prompt-btn"
-              onClick={() => onPromptClick(label)} // ส่งเฉพาะข้อความกลับไป
+              onClick={() => onPromptClick(item)} 
             >
               {label}
             </button>

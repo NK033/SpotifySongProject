@@ -357,9 +357,10 @@ async def get_intelligent_recommendations(
     user_id: str, 
     stylistic_profile: dict,
     emotional_profile: dict,
-    user_message: str
+    user_message: str,
+    route_info: dict | None = None
 ) -> list[dict]:
-    ANALYSIS_LIMIT = 100
+    ANALYSIS_LIMIT = 150
     logging.info(f"--- 🚀 Initializing V34: Micro-Batch Rescue ({ANALYSIS_LIMIT} slots) ---")
 
     user_seed_tracks = await get_seed_tracks(sp_client)
@@ -375,32 +376,67 @@ async def get_intelligent_recommendations(
     master_blacklist = existing_uris.union(history_uris).union(feedback_data.get('dislikes', set()))
 
     candidate_tracks_info = []
-    
-    def _blend_profiles(emotional: dict, stylistic: dict, w_emotion: float = 0.8, w_style: float = 0.2) -> dict:
-        keys = set((emotional or {}).keys()) | set((stylistic or {}).keys())
+
+    # --- Route-aware candidate seeding (artist mode) ---
+    if route_info and isinstance(route_info, dict):
+        route = str(route_info.get("route", "")).strip().casefold()
+        artist_name = route_info.get("artist_name")
+        artist_mode = str(route_info.get("artist_mode", "mix")).strip().casefold()
+        if route == "artist" and artist_name:
+            logging.info(f"🎤 Artist route detected: {artist_name} (mode={artist_mode})")
+            try:
+                STRICT_LIMIT = 20
+                # Mix ratio 70/30 when strict=20 => similar ≈ 9
+                MIX_SIMILAR_LIMIT = 9
+
+                strict_tracks = await get_artist_top_tracks_lastfm(str(artist_name), limit=STRICT_LIMIT)
+                for item in strict_tracks:
+                    candidate_tracks_info.append({
+                        "artist": item.get("artist"),
+                        "title": item.get("title"),
+                        "spotify_obj": None,
+                        "source": "artist_strict"
+                    })
+
+                if artist_mode in {"similar", "mix"}:
+                    neighbors = await get_similar_artists_lastfm(str(artist_name), limit=10)
+                    neighbor_tasks = [get_artist_top_tracks_lastfm(n, limit=5) for n in neighbors]
+                    results = await asyncio.gather(*neighbor_tasks, return_exceptions=True)
+                    sim_tracks = []
+                    for r in results:
+                        if isinstance(r, list):
+                            sim_tracks.extend(r)
+
+                    random.shuffle(sim_tracks)
+                    take_n = 20 if artist_mode == "similar" else MIX_SIMILAR_LIMIT
+                    for item in sim_tracks[:take_n]:
+                        candidate_tracks_info.append({
+                            "artist": item.get("artist"),
+                            "title": item.get("title"),
+                            "spotify_obj": None,
+                            "source": "artist_similar"
+                        })
+            except Exception as e:
+                logging.warning(f"Artist pre-seed failed: {e}")
+
+    def blend_profiles(emotional: dict, stylistic: dict, w_emotion: float = 0.8, w_style: float = 0.2) -> dict:
+        keys = set(emotional.keys()) | set(stylistic.keys())
         blended = {}
         for k in keys:
-            ev = float((emotional or {}).get(k, 0.0) or 0.0)
-            sv = float((stylistic or {}).get(k, 0.0) or 0.0)
-            blended[k] = (w_emotion * ev) + (w_style * sv)
+            ev = float(emotional.get(k, 0.0) or 0.0)
+            sv = float(stylistic.get(k, 0.0) or 0.0)
+            blended[k] = w_emotion * ev + w_style * sv
         s = sum(blended.values())
         if s > 0:
             for k in blended:
                 blended[k] /= s
         return blended
 
-    if emotional_profile and any(float(v or 0.0) > 0.0 for v in emotional_profile.values()):
-        target_fp = _blend_profiles(emotional_profile, stylistic_profile, 0.8, 0.2)
+    is_mood_route = bool(route_info) and route_info.get('route') == 'mood'
+    if is_mood_route:
+        target_fp = blend_profiles(emotional_profile, stylistic_profile, 0.8, 0.2)
     else:
-        target_fp = stylistic_profile
-
-    # --- Debug: Log profiles ---
-    def _top_items(d: dict, n: int = 5):
-        return sorted([(k, float(v or 0.0)) for k, v in (d or {}).items()], key=lambda x: x[1], reverse=True)[:n]
-
-    logging.info(f"🧠 User Taste (top): {_top_items(stylistic_profile, 5)}")
-    logging.info(f"🎭 Intent Mood (top): {_top_items(emotional_profile, 5)}")
-
+        target_fp = emotional_profile if any(v > 0.1 for v in emotional_profile.values()) else stylistic_profile
     db_tracks = await find_best_matches_from_db(sp_client, target_fp, master_blacklist, limit=15)
     for t in db_tracks:
         candidate_tracks_info.append({"artist": t['artists'][0]['name'], "title": t['name'], "spotify_obj": t})
@@ -580,15 +616,6 @@ async def get_intelligent_recommendations(
     scored_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
     
     final_playlist = scored_candidates[:15]
-
-    # --- Debug: Log final playlist with scores ---
-    for i, t in enumerate(final_playlist, 1):
-        ai = t.get('ai_analysis') or {}
-        score = ai.get('mood_score', 0.0)
-        src = ai.get('source', 'unknown')
-        artist = (t.get('artists') or [{}])[0].get('name', 'Unknown')
-        title = t.get('name', 'Unknown')
-        logging.info(f"🎼 Final #{i:02d}: {title} — {artist} | score={float(score):.4f} | src={src}")
     
     if len(final_playlist) < 3:
         logging.warning("⚠️ Too few matches. Using Fallback.")

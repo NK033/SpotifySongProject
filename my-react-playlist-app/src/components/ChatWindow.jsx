@@ -27,10 +27,13 @@ function ChatWindow({
     return () => clearTimeout(timeoutId);
   }, [chatHistory]);
 
-  const handlePromptClick = (promptObj) => {
-    // กรณีคลิก Prompt ให้ส่งค่าไปเลย ไม่ต้องเซ็ตลง Input ก็ได้
-    onSendMessage(promptObj.prompt, promptObj.intent); 
-  };
+  const handlePromptClick = (item) => {
+  const message = typeof item === 'string' ? item : item?.prompt;
+  const intent = typeof item === 'string' ? null : (item?.intent ?? null);
+
+  if (!message?.trim()) return;
+  onSendMessage(message, intent);
+};
 
   return (
     <div className="flex flex-col flex-1 bg-[var(--bg-primary)] transition-colors duration-300 overflow-hidden">

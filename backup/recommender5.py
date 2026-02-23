@@ -394,13 +394,6 @@ async def get_intelligent_recommendations(
     else:
         target_fp = stylistic_profile
 
-    # --- Debug: Log profiles ---
-    def _top_items(d: dict, n: int = 5):
-        return sorted([(k, float(v or 0.0)) for k, v in (d or {}).items()], key=lambda x: x[1], reverse=True)[:n]
-
-    logging.info(f"🧠 User Taste (top): {_top_items(stylistic_profile, 5)}")
-    logging.info(f"🎭 Intent Mood (top): {_top_items(emotional_profile, 5)}")
-
     db_tracks = await find_best_matches_from_db(sp_client, target_fp, master_blacklist, limit=15)
     for t in db_tracks:
         candidate_tracks_info.append({"artist": t['artists'][0]['name'], "title": t['name'], "spotify_obj": t})
@@ -580,15 +573,6 @@ async def get_intelligent_recommendations(
     scored_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
     
     final_playlist = scored_candidates[:15]
-
-    # --- Debug: Log final playlist with scores ---
-    for i, t in enumerate(final_playlist, 1):
-        ai = t.get('ai_analysis') or {}
-        score = ai.get('mood_score', 0.0)
-        src = ai.get('source', 'unknown')
-        artist = (t.get('artists') or [{}])[0].get('name', 'Unknown')
-        title = t.get('name', 'Unknown')
-        logging.info(f"🎼 Final #{i:02d}: {title} — {artist} | score={float(score):.4f} | src={src}")
     
     if len(final_playlist) < 3:
         logging.warning("⚠️ Too few matches. Using Fallback.")

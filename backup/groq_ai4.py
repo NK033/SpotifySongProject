@@ -9,6 +9,50 @@ from fastapi import HTTPException, status
 from typing import Any, Optional, List, Dict
 from ddgs import DDGS # ✅ Optimized: Use new package name
 
+
+# --- Persona / Language Guardrails (Thai, neutral voice) ---
+PERSONA_SYSTEM_TH_NEUTRAL = (
+    "คุณเป็นผู้ช่วยแนะนำเพลง พูดภาษาไทยเท่านั้น\n"
+    "โทนสุภาพเป็นกลาง ห้ามใช้คำลงท้ายเพศ เช่น 'ครับ' หรือ 'ค่ะ'\n"
+    "ห้ามสลับภาษา ห้ามใช้อักษรญี่ปุ่น (ฮิรางานะ/คาตากานะ) ยกเว้นชื่อศิลปิน/ชื่อเพลง/ชื่ออัลบั้มที่เป็นชื่อเฉพาะ\n"
+    "คำว่า instrumental ให้ใช้คำว่า 'เพลงบรรเลง' เท่านั้น\n"
+    "ตอบแบบกระชับ อ่านง่าย ไม่เวอร์"
+)
+
+_JP_RE = re.compile(r"[\u3040-\u30FF\u31F0-\u31FF]")  # Hiragana/Katakana blocks
+
+def _strip_gender_particles_th(text: str) -> str:
+    # Remove Thai gendered sentence particles. Keep it conservative.
+    text = re.sub(r"\b(ครับ|ค่ะ)\b", "", text)
+    # Also handle cases without word boundaries (Thai doesn't always separate by spaces)
+    text = text.replace("ครับ", "").replace("ค่ะ", "")
+    # Normalize spaces/newlines
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+def _has_japanese_kana(text: str) -> bool:
+    return bool(_JP_RE.search(text))
+
+async def _rewrite_to_thai_neutral(text: str) -> str:
+    """One-shot rewrite to enforce Thai-only neutral voice (no tools, no JSON)."""
+    prompt = (
+        "เขียนข้อความต่อไปนี้ใหม่ให้เป็นภาษาไทยล้วน โทนสุภาพเป็นกลาง "
+        "ห้ามใช้คำลงท้ายเพศ เช่น 'ครับ' หรือ 'ค่ะ' "
+        "ห้ามใช้อักษรญี่ปุ่น (ฮิรางานะ/คาตากานะ) "
+        "ยกเว้นชื่อศิลปิน/ชื่อเพลง/ชื่ออัลบั้มที่เป็นชื่อเฉพาะซึ่งคงรูปเดิมได้ "
+        "ถ้าต้องพูดถึง instrumental ให้ใช้คำว่า 'เพลงบรรเลง' เท่านั้น\n\n"
+        f"ข้อความ: {text}\n\n"
+        "ตอบกลับเป็นข้อความที่แก้แล้วเท่านั้น"
+    )
+    try:
+        out = await _call_groq_api(FAST_MODEL, [{"role": "system", "content": PERSONA_SYSTEM_TH_NEUTRAL},
+                                               {"role": "user", "content": prompt}],
+                                  temperature=0.2, allow_search=False, json_mode=False)
+        return _strip_gender_particles_th(out)
+    except Exception:
+        return _strip_gender_particles_th(text)
+
 # Import Local Modules
 from config import Config
 from database import save_song_analysis_to_db, get_song_analysis_from_db
@@ -301,24 +345,36 @@ async def summarize_playlist_groq(sp_client: spotipy.Spotify, final_song_uris: l
     final_str = "\n".join(tracks_objs)
 
     prompt = f"""
-    Act as a Music Curator. Summarize this generated playlist in Thai.
-    
-    User's Taste (Seeds):
-    {seed_info}
-    
-    Selected Playlist:
-    {final_str}
-    
-    Task:
-    1. Define the Theme of this playlist.
-    2. Explain why it fits the user's taste.
-    3. Write a short, inviting intro (2-3 sentences).
-    """
+คุณเป็นผู้ช่วยแนะนำเพลง พูดภาษาไทยเท่านั้น
+โทนสุภาพเป็นกลาง ห้ามใช้คำลงท้ายเพศ เช่น "ครับ" หรือ "ค่ะ"
+ห้ามสลับภาษา ห้ามใช้อักษรญี่ปุ่น (ฮิรางานะ/คาตากานะ) ยกเว้นชื่อศิลปิน/ชื่อเพลง/ชื่ออัลบั้ม
+คำว่า instrumental ให้ใช้คำว่า "เพลงบรรเลง" เท่านั้น
+
+ข้อมูลรสนิยมผู้ใช้ (Seed):
+{seed_info}
+
+เพลย์ลิสต์ที่เลือก:
+{final_str}
+
+งานที่ต้องทำ:
+- สรุปธีม/บรรยากาศของเพลย์ลิสต์
+- อธิบายแบบสั้น ๆ ว่าทำไมเข้ากับรสนิยมผู้ใช้
+- เขียนคำเชิญชวนสั้น ๆ 2-3 ประโยค
+
+ข้อกำหนด:
+- ตอบเป็นภาษาไทยเท่านั้น (ยกเว้นชื่อเฉพาะ)
+- ห้ามใช้ "ครับ/ค่ะ"
+- ตอบ 2-4 ประโยค กระชับ อ่านง่าย
+"""
 
     try:
-        return await _call_groq_api(FAST_MODEL, [{"role": "user", "content": prompt}], temperature=0.7, allow_search=False)
+        text = await _call_groq_api(FAST_MODEL, [{"role": "system", "content": PERSONA_SYSTEM_TH_NEUTRAL}, {"role": "user", "content": prompt}], temperature=0.6, allow_search=False, json_mode=False)
+        text = _strip_gender_particles_th(text)
+        if _has_japanese_kana(text):
+            text = await _rewrite_to_thai_neutral(text)
+        return text
     except Exception:
-        return "เพลย์ลิสต์คัดสรรพิเศษสำหรับคุณ หวังว่าจะถูกใจนะครับ!"
+        return "เพลย์ลิสต์คัดสรรพิเศษสำหรับคุณ หวังว่าจะถูกใจนะ"
 
 async def get_seed_expansion_groq(top_tracks: list[dict], user_message: str) -> list[dict]:
     """Expands seed tracks (No search needed, relies on AI knowledge)."""
@@ -354,54 +410,75 @@ async def get_seed_expansion_groq(top_tracks: list[dict], user_message: str) -> 
 async def rescue_lyrics_with_groq(failed_tracks: list[dict]) -> dict:
     """
     Rescue lyrics AND Normalize to English.
+
+    NOTE:
+    - Uses web search tool for retrieval (allow_search=True)
+    - DOES NOT use json_mode to avoid Groq tool-call validation issues (e.g. model attempting to call a non-existent tool like "JSON")
     """
-    if not failed_tracks: return {}
-    
+    if not failed_tracks:
+        return {}
+
     logging.info(f"--- Groq Lyric Rescue: Processing {len(failed_tracks)} tracks ---")
-    all_lyrics = {}
-    
+    all_lyrics: dict[str, str] = {}
+
     for t in failed_tracks:
         artist = t['artists'][0]['name']
         title = t['name']
-        
-        # 🔥 Prompt นี้คือการทำ Normalization ในตัว
-        # สั่งให้หาเนื้อเพลง และถ้าไม่ใช่ภาษาอังกฤษ ให้แปลเป็นอังกฤษทันที
-        prompt = f"""
-        Task: Find the lyrics for "{title}" by "{artist}".
-        
-        CRITICAL INSTRUCTION (DATA NORMALIZATION):
-        To ensure compatibility with our Emotion Analysis Engine, you MUST normalize the lyrics to ENGLISH.
-        
-        Rules:
-        1. If the song is already in English -> Return original lyrics.
-        2. If the song is NOT English (e.g., Japanese, Thai) -> Return **ENGLISH TRANSLATION**.
-        3. ❌ NO ROMAJI.
-        4. Output JSON ONLY: {{ "lyrics": "..." }}
-        """
-        
+
+        # Skip tracks that almost certainly have no lyrics
+        low_title = (title or "").lower()
+        if any(k in low_title for k in ["instrumental", "karaoke", "off vocal", "inst.", "inst ver", "instrumental ver"]):
+            continue
+
+        # Prompt: return plain text only (fast + robust)
+        prompt = f"""Task: Find the lyrics for \"{title}\" by \"{artist}\".
+
+CRITICAL INSTRUCTION (DATA NORMALIZATION):
+To ensure compatibility with our Emotion Analysis Engine, you MUST normalize the lyrics to ENGLISH.
+
+Rules:
+1. If the song is already in English -> return original lyrics.
+2. If the song is NOT English (e.g., Japanese, Thai) -> return ENGLISH TRANSLATION.
+3. ❌ NO ROMAJI.
+4. If you cannot find lyrics, return exactly: NO_LYRICS
+5. Return ONLY the lyrics text (no JSON, no explanations)."""
+
         try:
             content = await _call_groq_api(
-                SMART_MODEL, 
-                [{"role": "user", "content": prompt}], 
-                json_mode=True, 
-                allow_search=True 
+                SMART_MODEL,
+                [{"role": "user", "content": prompt}],
+                json_mode=False,
+                allow_search=True
             )
-            
-            data = json.loads(_sanitize_json_string(content))
-            raw_lyrics = data.get("lyrics", "")
-            
-            # Clean ให้เป็นบรรทัดเดียว
-            cleaned_lyrics = _clean_lyrics(raw_lyrics)
-            
+
+            if not content:
+                continue
+
+            text = content.strip()
+
+            # If the model still returns JSON, try to parse it safely.
+            if text.startswith("{") and "lyrics" in text:
+                try:
+                    data = json.loads(_sanitize_json_string(text))
+                    text = (data.get("lyrics") or "").strip()
+                except Exception:
+                    pass
+
+            if text == "NO_LYRICS":
+                continue
+
+            cleaned_lyrics = _clean_lyrics(text)
+
             if cleaned_lyrics and len(cleaned_lyrics) > 20:
                 key = f"{artist} - {title}"
                 all_lyrics[key] = cleaned_lyrics
                 logging.info(f"✅ Rescue & Normalize Success: {title}")
-                
+
         except Exception as e:
             logging.error(f"Rescue failed for {title}: {e}")
 
     return all_lyrics
+
 
 async def get_filler_tracks_groq(existing_tracks: list[dict], lang_guardrail: str) -> list[dict]:
     """Finds filler tracks (No search needed)."""
@@ -438,105 +515,159 @@ async def get_emotional_profile_from_groq(user_message: str) -> dict:
         return {}
 
 
-# --- New: Flexible mood intent analysis (28 emotions, handles emoji & colloquial Thai) ---
-GOEMOTIONS_28 = [
-    "admiration","amusement","anger","annoyance","approval","caring","confusion",
-    "curiosity","desire","disappointment","disapproval","disgust","embarrassment","excitement",
-    "fear","gratitude","grief","joy","love","nervousness","optimism",
-    "pride","realization","relief","remorse","sadness","surprise","neutral"
+# --- Flexible Recommendation Router (LLM) ---
+EMOTION_LABELS_28 = [
+    "admiration", "amusement", "anger", "annoyance", "approval", "caring",
+    "confusion", "curiosity", "desire", "disappointment", "disapproval", "disgust",
+    "embarrassment", "excitement", "fear", "gratitude", "grief", "joy", "love",
+    "nervousness", "optimism", "pride", "realization", "relief", "remorse",
+    "sadness", "surprise", "neutral",
 ]
 
-def emotions_top3_to_profile(emotions_top3: list[dict]) -> dict:
-    """Convert top3 list -> 28-dim dict."""
-    profile = {k: 0.0 for k in GOEMOTIONS_28}
-    for e in emotions_top3 or []:
-        label = str(e.get("label","")).strip()
-        w = float(e.get("weight", 0.0) or 0.0)
-        if label in profile:
-            profile[label] = max(profile[label], w)
-    # normalize
-    s = sum(profile.values())
-    if s > 0:
-        for k in profile:
-            profile[k] /= s
+def emotions_top3_to_profile(emotions: list[dict]) -> dict:
+    """Convert top-3 emotions list into a full 28-dim emotion profile dict."""
+    profile = {k: 0.0 for k in EMOTION_LABELS_28}
+    if not emotions:
+        profile["neutral"] = 1.0
+        return profile
+
+    # Normalize / clamp weights
+    cleaned = []
+    for e in emotions[:3]:
+        label = str(e.get("label", "")).strip().casefold()
+        if label not in profile:
+            continue
+        try:
+            w = float(e.get("weight", 0.0))
+        except Exception:
+            w = 0.0
+        w = max(0.0, min(1.0, w))
+        cleaned.append((label, w))
+
+    if not cleaned:
+        profile["neutral"] = 1.0
+        return profile
+
+    s = sum(w for _, w in cleaned)
+    if s <= 0:
+        profile["neutral"] = 1.0
+        return profile
+
+    for label, w in cleaned:
+        profile[label] = w / s
+
     return profile
 
-async def analyze_mood_intent_from_message_groq(user_message: str) -> dict:
-    """Return: {is_specific:bool, emotions:[{label,weight}*3], confidence:0-1, notes:str}."""
-    system = (
-        "คุณเป็นตัววิเคราะห์คำขอเพลงสำหรับระบบแนะนำเพลง\n"
-        "งาน: ตรวจว่าข้อความผู้ใช้มี 'เงื่อนไขเฉพาะ' ไหม (เช่น อารมณ์/กิจกรรม/บรรยากาศ/สถานการณ์)\n"
-        "แล้วแปลงเป็นอารมณ์ 3 อันดับจากรายการที่กำหนดเท่านั้น\n"
-        "ข้อกำหนด:\n"
-        "- ตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่น\n"
-        "- label ต้องเป็นหนึ่งใน 28 อารมณ์ที่ให้ไว้เท่านั้น\n"
-        "- emotions ต้องมี 3 ตัวเสมอ (ถ้าไม่มั่นใจให้เติม neutral)\n"
-        "- weight เป็นตัวเลข 0..1 และรวมกัน ~1\n"
-        "- รองรับ emoji และภาษาพูด (เช่น 😢😭 = sadness/grief, 😡😠 = anger, 😰😨 = fear/nervousness, ❤️😍 = love)\n"
-        "ให้ตั้ง is_specific=True เมื่อมีความต้องการเฉพาะ (เช่น 'เศร้าๆ', 'ชิลๆตอนขับรถ', 'อ่านหนังสือ', 'ตอนฝนตก')\n"
-        "ให้ตั้ง is_specific=False เมื่อเป็นคำขอกว้างๆ ไม่มีเงื่อนไข (เช่น 'แนะนำเพลง', 'หาเพลง')\n"
-    )
-    emotions_list = ", ".join(GOEMOTIONS_28)
-    user = f'''
-ข้อความผู้ใช้: "{user_message}"
+async def route_recommendation_request_groq(user_message: str) -> dict:
+    """Routes recommendation requests into artist/mood/general and returns top-3 emotions.
 
-เลือกอารมณ์จากรายการนี้เท่านั้น:
-[{emotions_list}]
+    Output JSON schema:
+    {
+      "route": "artist" | "mood" | "general",
+      "artist_name": str | null,
+      "artist_mode": "strict" | "similar" | "mix",
+      "emotions": [{"label": <one-of-28>, "weight": 0-1}, ... up to 3],
+      "confidence": 0-1
+    }
+    """
+    # Keep prompt short-ish but strict.
+    labels = ", ".join(EMOTION_LABELS_28)
+    prompt = f"""
+You are a routing classifier for a music recommendation app.
 
-ส่งออก JSON รูปแบบนี้:
-{{
-  "is_specific": true,
-  "emotions": [
-    {{"label": "sadness", "weight": 0.7}},
-    {{"label": "grief", "weight": 0.2}},
-    {{"label": "neutral", "weight": 0.1}}
-  ],
-  "confidence": 0.0,
-  "notes": "สั้นๆ"
-}}
-'''
+User message: "{user_message}"
+
+Task:
+1) Decide route:
+- "artist": user explicitly asks for songs OF a singer/band (e.g., Thai: "เพลงของ X", "แนะนำเพลงของ X").
+- "mood": user asks by mood/activity/vibe (e.g., "เศร้าๆ", "ขับรถชิลๆ", "อ่านหนังสือ").
+- "general": broad request without clear artist/mood (e.g., "แนะนำเพลง").
+2) If route is "artist", extract artist_name if present.
+3) Decide artist_mode:
+- "strict": if message implies songs OF the artist (Thai: "ของ", "จาก", "เพลงของ")
+- "similar": if message implies style/similar (Thai: "สไตล์", "แนว", "คล้าย")
+- "mix": if unclear.
+4) Choose TOP 3 emotions from this fixed list ONLY:
+[{labels}]
+Return each with a weight (0..1). If uncertain, include "neutral".
+5) Provide confidence (0..1).
+
+Rules:
+- Output JSON ONLY, no extra text.
+- Do NOT invent new emotion labels.
+- emotions must be an array length 3 (pad with neutral if needed).
+"""
+
     try:
         content = await _call_groq_api(
             FAST_MODEL,
-            [{"role":"system","content":system},{"role":"user","content":user}],
+            [{"role": "user", "content": prompt}],
             json_mode=True,
-            temperature=0.2,
+            temperature=0.0,
             allow_search=False
         )
         data = json.loads(_sanitize_json_string(content))
-        # sanitize
-        emos = data.get("emotions", [])
-        if not isinstance(emos, list): emos = []
-        cleaned=[]
-        for e in emos[:3]:
-            if isinstance(e, dict):
-                lab=str(e.get("label","")).strip()
-                if lab not in GOEMOTIONS_28:
-                    continue
-                try:
-                    w=float(e.get("weight",0.0) or 0.0)
-                except Exception:
-                    w=0.0
-                cleaned.append({"label": lab, "weight": max(0.0, min(1.0, w))})
-        while len(cleaned) < 3:
-            cleaned.append({"label":"neutral","weight":0.0})
-        # renorm weights
-        s=sum(x["weight"] for x in cleaned)
-        if s>0:
-            for x in cleaned:
-                x["weight"]/=s
-        else:
-            cleaned=[{"label":"neutral","weight":1.0},{"label":"admiration","weight":0.0},{"label":"amusement","weight":0.0}]
-        return {
-            "is_specific": bool(data.get("is_specific", False)),
-            "emotions": cleaned,
-            "confidence": float(data.get("confidence", 0.0) or 0.0),
-            "notes": str(data.get("notes","")).strip()
-        }
-    except Exception:
-        # safe fallback: treat as general
-        return {"is_specific": False, "emotions": [{"label":"neutral","weight":1.0},{"label":"admiration","weight":0.0},{"label":"amusement","weight":0.0}], "confidence": 0.0, "notes": "fallback"}
 
+        # Defensive cleanup
+        route = str(data.get("route", "general")).strip().casefold()
+        if route not in {"artist", "mood", "general"}:
+            route = "general"
+
+        artist_name = data.get("artist_name")
+        if artist_name is not None:
+            artist_name = str(artist_name).strip()
+            if not artist_name:
+                artist_name = None
+
+        artist_mode = str(data.get("artist_mode", "mix")).strip().casefold()
+        if artist_mode not in {"strict", "similar", "mix"}:
+            artist_mode = "mix"
+
+        emotions = data.get("emotions", [])
+        if not isinstance(emotions, list):
+            emotions = []
+
+        # Ensure 3 emotions
+        cleaned = []
+        for e in emotions:
+            if not isinstance(e, dict):
+                continue
+            label = str(e.get("label", "")).strip().casefold()
+            if label not in EMOTION_LABELS_28:
+                continue
+            try:
+                w = float(e.get("weight", 0.0))
+            except Exception:
+                w = 0.0
+            w = max(0.0, min(1.0, w))
+            cleaned.append({"label": label, "weight": w})
+            if len(cleaned) >= 3:
+                break
+        while len(cleaned) < 3:
+            cleaned.append({"label": "neutral", "weight": 1.0})
+
+        try:
+            conf = float(data.get("confidence", 0.5))
+        except Exception:
+            conf = 0.5
+        conf = max(0.0, min(1.0, conf))
+
+        return {
+            "route": route,
+            "artist_name": artist_name,
+            "artist_mode": artist_mode,
+            "emotions": cleaned,
+            "confidence": conf
+        }
+    except Exception as e:
+        logging.error(f"route_recommendation_request_groq failed: {e}")
+        return {
+            "route": "general",
+            "artist_name": None,
+            "artist_mode": "mix",
+            "emotions": [{"label": "neutral", "weight": 1.0}] * 3,
+            "confidence": 0.0
+        }
 
 async def preload_groq_details(sp_client: spotipy.Spotify, tracks: list[dict]):
     """Preloads song analysis (Parallel)."""

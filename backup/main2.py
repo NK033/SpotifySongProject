@@ -1,7 +1,6 @@
 # main.py (New Architecture)
 import asyncio
 import json
-import re
 import os
 import spotipy
 import google.generativeai as genai
@@ -30,11 +29,13 @@ import genius_api
 from models import ChatRequest, ChatResponse, FeedbackRequest, PinPlaylistRequest, UpdatePlaylistRequest
 from spotify_api import SPOTIFY_SCOPES, create_spotify_client, get_user_top_tracks, get_current_playing_track
 from groq_ai import (
-    groq_client, SMART_MODEL, FAST_MODEL, 
+    groq_client, SMART_MODEL, FAST_MODEL,
     GROQ_TOOLS,  # สำคัญ! ต้องมีตัวนี้
-    get_song_analysis_details_groq, summarize_playlist_groq, get_emotional_profile_from_groq,
-    rescue_lyrics_with_groq # ✅ Added rescue function
-, analyze_mood_intent_from_message_groq, emotions_top3_to_profile)
+    get_song_analysis_details_groq, summarize_playlist_groq,
+    get_emotional_profile_from_groq,  # legacy (still used elsewhere)
+    route_recommendation_request_groq, emotions_top3_to_profile,
+    rescue_lyrics_with_groq  # ✅ Added rescue function
+)
 IS_SYSTEM_BUSY = False
 
 # --- Logging Configuration ---
@@ -426,75 +427,39 @@ async def chat_endpoint(
                     from recommender import build_user_mood_profile
                     historical_profile = await build_user_mood_profile(sp_client, user_id)
                     if not historical_profile:
-                        # Cold start: no history/profile yet -> suggest top charts
-                        logging.warning("Cold start detected: user has little or no listening history. Suggesting top charts...")
-                        user_profile = await get_user_profile(sp_client)
-                        user_country = user_profile.get("country", "US")
+                        return ChatResponse(response="ขออภัยค่ะ ฉันยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อยนะคะ")
 
-                        # Try to infer preferred chart country from seed tracks language (if any)
-                        try:
-                            from recommender import get_seed_tracks
-                            seed_tracks = await get_seed_tracks(sp_client)
-                        except Exception:
-                            seed_tracks = []
-
-                        jp_re = re.compile(r"[\u3040-\u30FF\u4E00-\u9FFF]")
-                        jp_hits = 0
-                        total_hits = 0
-                        for t in (seed_tracks or []):
-                            s = f"{t.get('name','')} {t.get('artists',[{}])[0].get('name','')}" if isinstance(t.get('artists'), list) and t.get('artists') else f"{t.get('name','')}"
-                            total_hits += max(1, len(s))
-                            jp_hits += len(jp_re.findall(s))
-                        chart_country = "JP" if (total_hits > 0 and (jp_hits / total_hits) > 0.02) else user_country
-
-                        chart_tracks_info = await get_chart_top_tracks(chart_country, limit=20)
-                        chart_songs_on_spotify = []
-                        for track_info in (chart_tracks_info or []):
-                            query = f"track:{track_info['title']} artist:{track_info['artist']}"
-                            spotify_results = await search_spotify_songs(sp_client, query, limit=1)
-                            if spotify_results:
-                                chart_songs_on_spotify.append(spotify_results[0])
-
-                        if not chart_songs_on_spotify:
-                            return ChatResponse(response="ดูเหมือนบัญชีนี้ยังมีประวัติการฟังไม่มาก เลยยังจับรสนิยมได้ไม่ชัด ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อย แล้วค่อยกลับมาขอแนะนำเพลงได้")
-
-                        msg = (
-                            "ดูเหมือนบัญชีนี้ยังมีประวัติการฟังไม่มาก เลยยังจับรสนิยมได้ไม่ชัด "
-                            "ลองเริ่มจากเพลงฮิตช่วงนี้ก่อนดีไหม ถ้าชอบแนวไหนบอกได้ แล้วจะปรับให้เข้ากับรสนิยมมากขึ้น"
-                        )
-                        return ChatResponse(response=msg, songs_found=chart_songs_on_spotify)
-
-
-                # Analyze Intent Mood (LLM, 28 emotions)
-                def _topk(profile: dict, k: int = 5):
-                    try:
-                        return sorted([(k, float(v or 0.0)) for k, v in (profile or {}).items()], key=lambda x: x[1], reverse=True)[:k]
-                    except Exception:
-                        return []
-
+                # Analyze Emotion / Route (Hybrid)
+                generic_prompts = ["🎵 แนะนำเพลงส่วนตัวให้หน่อย", "แนะนำเพลง", "เพลงแนะนำ", "ขอเพลงหน่อย", "หาเพลง"]
                 emotional_profile = {}
-                intent_mood = {"is_specific": False, "emotions": [], "confidence": 0.0}
+                route_info = {"route": "general", "artist_name": None, "artist_mode": "mix", "emotions": [{"label": "neutral", "weight": 1.0}] * 3, "confidence": 1.0}
 
-                # Always ask the router for non-artist requests; fall back to PURE taste if confidence is low
-                intent_mood = await analyze_mood_intent_from_message_groq(user_message)
-                intent_top = [(e.get("label"), e.get("weight")) for e in (intent_mood.get("emotions") or [])]
-                logging.info(f"🎭 Intent Mood (top3): {intent_top} | is_specific={intent_mood.get('is_specific')} | conf={intent_mood.get('confidence')}")
-                logging.info(f"🧠 User Taste (top): {_topk(historical_profile, 5)}")
-
-                if intent_mood.get("is_specific") and float(intent_mood.get("confidence", 0.0) or 0.0) >= 0.55:
-                    emotional_profile = emotions_top3_to_profile(intent_mood.get("emotions") or [])
-                    logging.info("Specific request detected (LLM). Using blended mood/taste downstream (80/20).")
+                if user_message in generic_prompts:
+                    logging.info("Generic request detected. Using PURE User Taste Profile (general route).")
+                    # Keep emotional_profile empty so recommender will prefer stylistic_profile
+                    emotional_profile = {}
                 else:
-                    logging.info("Generic request detected (LLM). Using PURE User Taste Profile.")
+                    logging.info("Specific request detected. Routing (artist/mood/general) + top-3 emotions...")
+                    route_info = await route_recommendation_request_groq(user_message)
 
+                    # Convert top-3 emotions into 28-dim profile for downstream scoring
+                    # If router is uncertain, it will likely return neutral anyway.
+                    emotional_profile = emotions_top3_to_profile(route_info.get("emotions", []))
 
-                # --- CALL RECOMMENDER ---                # --- CALL RECOMMENDER ---
+                    # Safety fallback
+                    if route_info.get("confidence", 0.0) < 0.4:
+                        logging.info("Router confidence low. Falling back to general route.")
+                        route_info = {"route": "general", "artist_name": None, "artist_mode": "mix", "emotions": [{"label": "neutral", "weight": 1.0}] * 3, "confidence": route_info.get("confidence", 0.0)}
+                        emotional_profile = {}
+
+                # --- CALL RECOMMENDER ---
                 logging.info("Calling get_intelligent_recommendations...")
                 recommended_songs = await get_intelligent_recommendations(
-                    sp_client, user_id, 
-                    historical_profile, 
-                    emotional_profile, 
-                    user_message
+                    sp_client, user_id,
+                    historical_profile,
+                    emotional_profile,
+                    user_message,
+                    route_info
                 )
 
                 if not recommended_songs:

@@ -359,7 +359,7 @@ async def get_intelligent_recommendations(
     emotional_profile: dict,
     user_message: str
 ) -> list[dict]:
-    ANALYSIS_LIMIT = 100
+    ANALYSIS_LIMIT = 150
     logging.info(f"--- 🚀 Initializing V34: Micro-Batch Rescue ({ANALYSIS_LIMIT} slots) ---")
 
     user_seed_tracks = await get_seed_tracks(sp_client)
@@ -376,31 +376,7 @@ async def get_intelligent_recommendations(
 
     candidate_tracks_info = []
     
-    def _blend_profiles(emotional: dict, stylistic: dict, w_emotion: float = 0.8, w_style: float = 0.2) -> dict:
-        keys = set((emotional or {}).keys()) | set((stylistic or {}).keys())
-        blended = {}
-        for k in keys:
-            ev = float((emotional or {}).get(k, 0.0) or 0.0)
-            sv = float((stylistic or {}).get(k, 0.0) or 0.0)
-            blended[k] = (w_emotion * ev) + (w_style * sv)
-        s = sum(blended.values())
-        if s > 0:
-            for k in blended:
-                blended[k] /= s
-        return blended
-
-    if emotional_profile and any(float(v or 0.0) > 0.0 for v in emotional_profile.values()):
-        target_fp = _blend_profiles(emotional_profile, stylistic_profile, 0.8, 0.2)
-    else:
-        target_fp = stylistic_profile
-
-    # --- Debug: Log profiles ---
-    def _top_items(d: dict, n: int = 5):
-        return sorted([(k, float(v or 0.0)) for k, v in (d or {}).items()], key=lambda x: x[1], reverse=True)[:n]
-
-    logging.info(f"🧠 User Taste (top): {_top_items(stylistic_profile, 5)}")
-    logging.info(f"🎭 Intent Mood (top): {_top_items(emotional_profile, 5)}")
-
+    target_fp = emotional_profile if any(v > 0.1 for v in emotional_profile.values()) else stylistic_profile
     db_tracks = await find_best_matches_from_db(sp_client, target_fp, master_blacklist, limit=15)
     for t in db_tracks:
         candidate_tracks_info.append({"artist": t['artists'][0]['name'], "title": t['name'], "spotify_obj": t})
@@ -580,15 +556,6 @@ async def get_intelligent_recommendations(
     scored_candidates.sort(key=lambda x: x['ai_analysis']['mood_score'], reverse=True)
     
     final_playlist = scored_candidates[:15]
-
-    # --- Debug: Log final playlist with scores ---
-    for i, t in enumerate(final_playlist, 1):
-        ai = t.get('ai_analysis') or {}
-        score = ai.get('mood_score', 0.0)
-        src = ai.get('source', 'unknown')
-        artist = (t.get('artists') or [{}])[0].get('name', 'Unknown')
-        title = t.get('name', 'Unknown')
-        logging.info(f"🎼 Final #{i:02d}: {title} — {artist} | score={float(score):.4f} | src={src}")
     
     if len(final_playlist) < 3:
         logging.warning("⚠️ Too few matches. Using Fallback.")

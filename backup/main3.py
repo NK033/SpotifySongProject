@@ -1,7 +1,6 @@
 # main.py (New Architecture)
 import asyncio
 import json
-import re
 import os
 import spotipy
 import google.generativeai as genai
@@ -34,7 +33,7 @@ from groq_ai import (
     GROQ_TOOLS,  # สำคัญ! ต้องมีตัวนี้
     get_song_analysis_details_groq, summarize_playlist_groq, get_emotional_profile_from_groq,
     rescue_lyrics_with_groq # ✅ Added rescue function
-, analyze_mood_intent_from_message_groq, emotions_top3_to_profile)
+)
 IS_SYSTEM_BUSY = False
 
 # --- Logging Configuration ---
@@ -426,69 +425,22 @@ async def chat_endpoint(
                     from recommender import build_user_mood_profile
                     historical_profile = await build_user_mood_profile(sp_client, user_id)
                     if not historical_profile:
-                        # Cold start: no history/profile yet -> suggest top charts
-                        logging.warning("Cold start detected: user has little or no listening history. Suggesting top charts...")
-                        user_profile = await get_user_profile(sp_client)
-                        user_country = user_profile.get("country", "US")
+                        return ChatResponse(response="ขออภัย ระบบยังหาเพลงที่เหมาะกับคุณไม่เจอ ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อย")
 
-                        # Try to infer preferred chart country from seed tracks language (if any)
-                        try:
-                            from recommender import get_seed_tracks
-                            seed_tracks = await get_seed_tracks(sp_client)
-                        except Exception:
-                            seed_tracks = []
+                # Analyze Emotion
+                generic_prompts = ["🎵 แนะนำเพลงส่วนตัวให้หน่อย", "แนะนำเพลง", "เพลงแนะนำ", "ขอเพลงหน่อย", "หาเพลง"]
+                emotional_profile = {} 
+                
+                normalized_msg = (user_message or '').strip().lower()
+                normalized_msg = normalized_msg.replace('\n',' ').strip()
 
-                        jp_re = re.compile(r"[\u3040-\u30FF\u4E00-\u9FFF]")
-                        jp_hits = 0
-                        total_hits = 0
-                        for t in (seed_tracks or []):
-                            s = f"{t.get('name','')} {t.get('artists',[{}])[0].get('name','')}" if isinstance(t.get('artists'), list) and t.get('artists') else f"{t.get('name','')}"
-                            total_hits += max(1, len(s))
-                            jp_hits += len(jp_re.findall(s))
-                        chart_country = "JP" if (total_hits > 0 and (jp_hits / total_hits) > 0.02) else user_country
-
-                        chart_tracks_info = await get_chart_top_tracks(chart_country, limit=20)
-                        chart_songs_on_spotify = []
-                        for track_info in (chart_tracks_info or []):
-                            query = f"track:{track_info['title']} artist:{track_info['artist']}"
-                            spotify_results = await search_spotify_songs(sp_client, query, limit=1)
-                            if spotify_results:
-                                chart_songs_on_spotify.append(spotify_results[0])
-
-                        if not chart_songs_on_spotify:
-                            return ChatResponse(response="ดูเหมือนบัญชีนี้ยังมีประวัติการฟังไม่มาก เลยยังจับรสนิยมได้ไม่ชัด ลองฟังเพลงใน Spotify เพิ่มอีกสักหน่อย แล้วค่อยกลับมาขอแนะนำเพลงได้")
-
-                        msg = (
-                            "ดูเหมือนบัญชีนี้ยังมีประวัติการฟังไม่มาก เลยยังจับรสนิยมได้ไม่ชัด "
-                            "ลองเริ่มจากเพลงฮิตช่วงนี้ก่อนดีไหม ถ้าชอบแนวไหนบอกได้ แล้วจะปรับให้เข้ากับรสนิยมมากขึ้น"
-                        )
-                        return ChatResponse(response=msg, songs_found=chart_songs_on_spotify)
-
-
-                # Analyze Intent Mood (LLM, 28 emotions)
-                def _topk(profile: dict, k: int = 5):
-                    try:
-                        return sorted([(k, float(v or 0.0)) for k, v in (profile or {}).items()], key=lambda x: x[1], reverse=True)[:k]
-                    except Exception:
-                        return []
-
-                emotional_profile = {}
-                intent_mood = {"is_specific": False, "emotions": [], "confidence": 0.0}
-
-                # Always ask the router for non-artist requests; fall back to PURE taste if confidence is low
-                intent_mood = await analyze_mood_intent_from_message_groq(user_message)
-                intent_top = [(e.get("label"), e.get("weight")) for e in (intent_mood.get("emotions") or [])]
-                logging.info(f"🎭 Intent Mood (top3): {intent_top} | is_specific={intent_mood.get('is_specific')} | conf={intent_mood.get('confidence')}")
-                logging.info(f"🧠 User Taste (top): {_topk(historical_profile, 5)}")
-
-                if intent_mood.get("is_specific") and float(intent_mood.get("confidence", 0.0) or 0.0) >= 0.55:
-                    emotional_profile = emotions_top3_to_profile(intent_mood.get("emotions") or [])
-                    logging.info("Specific request detected (LLM). Using blended mood/taste downstream (80/20).")
+                if any(p in normalized_msg for p in [p.strip().lower() for p in generic_prompts]):
+                    logging.info(f"Generic request detected. Using PURE User Taste Profile.")
                 else:
-                    logging.info("Generic request detected (LLM). Using PURE User Taste Profile.")
-
-
-                # --- CALL RECOMMENDER ---                # --- CALL RECOMMENDER ---
+                    logging.info(f"Specific request detected. Analyzing request emotion...")
+                    emotional_profile = await get_emotional_profile_from_groq(user_message)
+                
+                # --- CALL RECOMMENDER ---
                 logging.info("Calling get_intelligent_recommendations...")
                 recommended_songs = await get_intelligent_recommendations(
                     sp_client, user_id, 
@@ -499,31 +451,31 @@ async def chat_endpoint(
 
                 if not recommended_songs:
                     logging.error("❌ Recommender returned EMPTY list!")
-                    return ChatResponse(response="ขออภัยค่ะ ฉันยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ในตอนนี้ (AI คืนค่าว่าง)")
+                    return ChatResponse(response="ขออภัย ตอนนี้ระบบยังไม่สามารถหาเพลงที่เหมาะกับคุณได้ (AI คืนค่าว่าง)")
                 
                 logging.info(f"✅ Recommender returned {len(recommended_songs)} songs.")
 
-                # Presentation
-                song_titles = ", ".join([f"'{s['name']}'" for s in recommended_songs])
-                presentation_prompt = f"""
-                As an AI Musicologist, present this playlist based on request: "{user_message}"
-                Songs: {song_titles}.
-                Instructions:
-                1. Brief mood summary.
-                2. Invite user to explore.
-                3. Max 3-4 sentences.
-                4. Respond in Thai only.
-                """
-                
-                final_response = await groq_client.chat.completions.create(
-                    model=FAST_MODEL,
-                    messages=[{"role": "user", "content": presentation_prompt}]
-                )
-                return ChatResponse(response=final_response.choices[0].message.content, songs_found=recommended_songs)
+                # Presentation (use centralized persona/guardrails)
+                try:
+                    final_song_uris = [s.get("uri") for s in recommended_songs if s.get("uri")]
+                    # Fallback: if dict doesn't contain 'uri', try 'track_uri'
+                    if not final_song_uris:
+                        final_song_uris = [s.get("track_uri") for s in recommended_songs if s.get("track_uri")]
+
+                    playlist_summary = await summarize_playlist_groq(
+                        sp_client=sp_client,
+                        final_song_uris=final_song_uris,
+                        seed_tracks=recommended_songs
+                    )
+                except Exception as _e:
+                    logging.error(f"⚠️ Failed to summarize playlist with guardrails: {_e}", exc_info=True)
+                    playlist_summary = "นี่คือเพลย์ลิสต์ที่คัดมาให้ตามคำขอของคุณ ลองฟังแล้วบอกได้ว่าชอบแนวไหนเป็นพิเศษ"
+
+                return ChatResponse(response=playlist_summary, songs_found=recommended_songs)
             
             except Exception as e:
                 logging.error(f"❌ Critical Error in Recommendation Path: {e}", exc_info=True)
-                return ChatResponse(response="เกิดข้อผิดพลาดในการประมวลผลคำแนะนำเพลงค่ะ โปรดลองใหม่อีกครั้ง")
+                return ChatResponse(response="เกิดข้อผิดพลาดในการประมวลผลคำแนะนำเพลง โปรดลองใหม่อีกครั้ง")
             
             finally:
                 logging.info("🏁 Recommendation Flow Finished. Releasing Busy State.")
@@ -542,7 +494,7 @@ async def chat_endpoint(
             chart_tracks_info = await get_chart_top_tracks(user_country) 
             
             if not chart_tracks_info:
-                return ChatResponse(response="ขออภัยค่ะ ตอนนี้ฉันไม่สามารถดึงข้อมูลเพลงฮิตได้")
+                return ChatResponse(response="ขออภัย ตอนนี้ระบบยังไม่สามารถดึงข้อมูลเพลงฮิตได้")
             
             chart_songs_on_spotify = []
             for track_info in chart_tracks_info:
@@ -615,7 +567,7 @@ async def chat_endpoint(
 
             if not chat_completion.choices[0].message.content:
                 logging.error("Groq response was empty.")
-                return ChatResponse(response="ขออภัยค่ะ ตอนนี้ AI ไม่สามารถสร้างคำตอบได้ ลองใหม่อีกครั้งนะคะ")
+                return ChatResponse(response="ขออภัย ตอนนี้ AI ยังไม่สามารถสร้างคำตอบได้ ลองใหม่อีกครั้ง")
 
             return ChatResponse(response=chat_completion.choices[0].message.content)
     
@@ -748,7 +700,7 @@ async def get_live_status(sp_client: spotipy.Spotify = Depends(get_spotify_clien
             # กรณีหาเนื้อเพลงไม่เจอ
             return {
                 **track_info,
-                "notification": "เพลงนี้เพราะดีครับ! เสียดายผมแกะเนื้อไม่ออก แต่ถ้าชอบแนวนี้ เดี๋ยวผมจัดให้ตามชื่อศิลปินเลย!"
+                "notification": "เพลงนี้เพราะมาก! เสียดายระบบแกะเนื้อไม่ออก แต่ถ้าชอบแนวนี้ เดี๋ยวจัดเพลงให้ตามชื่อศิลปินได้เลย"
             }
 
     # 4. สร้างข้อความ Notification
