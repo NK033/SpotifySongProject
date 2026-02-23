@@ -949,7 +949,6 @@ async def get_suggested_prompts(sp_client: spotipy.Spotify = Depends(get_spotify
                 'sadness': {'prompt': '😢 หาเพลงเศร้าๆ', 'intent': 'get_recommendations'},
                 'love': {'prompt': '❤️ หาเพลงรักโรแมนติก', 'intent': 'get_recommendations'},
                 'anger': {'prompt': '😡 หาเพลงดุๆ', 'intent': 'get_recommendations'},
-                'fear': {'prompt': '😱 หาเพลงแนวลึกลับ', 'intent': 'get_recommendations'},
                 'optimism': {'prompt': '✨ หาเพลงให้กำลังใจ', 'intent': 'get_recommendations'}
             }
 

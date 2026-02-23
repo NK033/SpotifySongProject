@@ -60,8 +60,8 @@ function ChatWindow({
         <div ref={chatEndRef} />
       </div>
 
-      {/* แสดง Suggested Prompts เมื่อ Login แล้วเท่านั้น */}
-      {userInfo && chatHistory.length <= 1 && (
+      {/* แสดง Suggested Prompts ตลอด เพื่อให้ผู้ใช้มีตัวเลือกกดได้ทันที */}
+      {(
         <SuggestedPrompts 
           prompts={suggestedPrompts} 
           onPromptClick={handlePromptClick} 

@@ -214,6 +214,8 @@ export const AppProvider = ({ children }) => {
       setChatHistory(prev => [...prev, errorMsg]);
     } finally {
       setIsFetching(false);
+      // รีเฟรช suggested prompts ทุกครั้งเพื่อให้ 2 ตัวท้ายมีการสลับ/สุ่ม
+      fetchSuggestedPrompts();
     }
   };
 
