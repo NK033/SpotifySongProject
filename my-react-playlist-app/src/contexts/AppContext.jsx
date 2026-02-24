@@ -15,6 +15,7 @@ import {
   getFeedbackHistoryAPI,
   deleteFeedbackAPI,
   getFeedbackStatusAPI,
+  getSpotifyTrackByUrlAPI,
   BASE_URL 
 } from '../api';
 
@@ -459,6 +460,55 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  const updateLatestSongListInChat = (updater) => {
+    setChatHistory(prev => {
+      let targetIndex = -1;
+      for (let i = prev.length - 1; i >= 0; i -= 1) {
+        const item = prev[i];
+        if (!item?.isUser && Array.isArray(item?.songs) && item.songs.length > 0) {
+          targetIndex = i;
+          break;
+        }
+      }
+
+      if (targetIndex === -1) return prev;
+
+      const target = prev[targetIndex];
+      const nextSongs = updater(target.songs || []);
+      if (!Array.isArray(nextSongs)) return prev;
+
+      const next = [...prev];
+      next[targetIndex] = { ...target, songs: nextSongs };
+      setCurrentRecommendedSongs(nextSongs);
+      return next;
+    });
+  };
+
+  const handleRemoveSongFromChat = (songUri) => {
+    if (!songUri) return;
+    updateLatestSongListInChat((songs) => songs.filter(song => song.uri !== songUri));
+  };
+
+  const handleAddSongFromSpotifyUrl = async (spotifyUrl) => {
+    const normalizedUrl = spotifyUrl?.trim?.();
+    if (!normalizedUrl) return;
+
+    setIsFetching(true);
+    try {
+      const track = await getSpotifyTrackByUrlAPI(normalizedUrl);
+      updateLatestSongListInChat((songs) => {
+        const alreadyExists = songs.some(song => song.uri === track.uri);
+        if (alreadyExists) return songs;
+        return [...songs, track];
+      });
+    } catch (error) {
+      alert(error.message || 'ไม่สามารถเพิ่มเพลงจาก Spotify URL ได้');
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+
   return (
     <AppContext.Provider value={{
       sidebarOpen, setSidebarOpen,
@@ -508,6 +558,8 @@ export const AppProvider = ({ children }) => {
       handleUpdateFeedbackHistory,
       userFeedbackMap,
       fetchUserFeedbackStatus,
+      handleRemoveSongFromChat,
+      handleAddSongFromSpotifyUrl,
       
       // ✅ 3. ส่งฟังก์ชันนี้ออกไปให้ Sidebar ใช้งาน
       handleClearChat 

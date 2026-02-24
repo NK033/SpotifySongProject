@@ -2,7 +2,7 @@
 import React from 'react';
 import { useAppContext } from '../contexts/AppContext';
 
-function SongCard({ song, onShowDetails }) {
+function SongCard({ song, onShowDetails, onRemoveSong }) {
   const { userFeedbackMap, handleFeedback } = useAppContext();
 
   const albumName = song.album?.name || 'Unknown Album';
@@ -76,6 +76,15 @@ function SongCard({ song, onShowDetails }) {
             <i className={`${currentStatus === 'dislike' ? 'fas' : 'far'} fa-thumbs-down text-base md:text-lg mt-0.5`}></i>
           </button>
         </div>
+
+        <button
+          onClick={() => onRemoveSong?.(song.uri)}
+          className="flex items-center justify-center w-8 h-8 md:w-auto md:h-auto md:py-1.5 md:px-3 rounded-full bg-red-600 hover:bg-red-700 text-white transition text-xs shadow-sm"
+          title="ลบเพลงออกจากรายการ"
+        >
+          <i className="fas fa-trash md:mr-1"></i>
+          <span className="hidden md:inline">Delete</span>
+        </button>
 
         {/* ปุ่ม Details: ซ่อน Text เหลือแต่ Icon ในมือถือ */}
         <button 

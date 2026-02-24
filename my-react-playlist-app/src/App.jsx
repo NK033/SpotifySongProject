@@ -55,6 +55,8 @@ function App() {
     showSongModal, setShowSongModal,
     modalSong,
     modalAnalysis,
+    handleRemoveSongFromChat,
+    handleAddSongFromSpotifyUrl,
   } = useAppContext();
 
   return (
@@ -83,6 +85,8 @@ function App() {
         onOpenSidebar={() => setSidebarOpen(true)}
         currentRecommendedSongs={currentRecommendedSongs}
         onCreatePlaylist={handleCreatePlaylist}
+        onRemoveSong={handleRemoveSongFromChat}
+        onAddSongFromUrl={handleAddSongFromSpotifyUrl}
         userInput={userInput}
         onUserInputChange={(e) => setUserInput(e.target.value)}
         onSendMessage={sendMessageToBackend}

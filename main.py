@@ -26,6 +26,7 @@ from fastapi import BackgroundTasks
 from recommender import get_intelligent_recommendations, update_user_profile_background
 from pydantic import BaseModel
 from typing import List
+from urllib.parse import urlparse
 import database
 import genius_api
 # (*** แก้ไข: Import ChatRequest จาก models ที่อัปเดตแล้ว ***)
@@ -70,6 +71,33 @@ from recommender import (
 # --- Setup ---
 Config.validate()
 app = FastAPI()
+
+SPOTIFY_TRACK_ID_REGEX = re.compile(r"^[A-Za-z0-9]{22}$")
+
+
+def _extract_track_id_from_spotify_url(track_url: str) -> str | None:
+    if not track_url:
+        return None
+
+    raw = track_url.strip()
+    if raw.startswith("spotify:track:"):
+        candidate = raw.split(":")[-1]
+        return candidate if SPOTIFY_TRACK_ID_REGEX.match(candidate) else None
+
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return None
+
+    if "spotify" not in (parsed.netloc or ""):
+        return None
+
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    if len(parts) < 2 or parts[0] != "track":
+        return None
+
+    candidate = parts[1]
+    return candidate if SPOTIFY_TRACK_ID_REGEX.match(candidate) else None
 
 
 def _sanitize_assistant_text(text: str) -> str:
@@ -265,6 +293,19 @@ async def get_feedback_history_endpoint(sp_client: spotipy.Spotify = Depends(get
     except Exception as e:
         logging.error(f"Error fetching feedback history: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/spotify_track")
+async def get_spotify_track_from_url(track_url: str, sp_client: spotipy.Spotify = Depends(get_spotify_client)):
+    track_id = _extract_track_id_from_spotify_url(track_url)
+    if not track_id:
+        raise HTTPException(status_code=400, detail="Invalid Spotify track URL")
+
+    try:
+        return sp_client.track(track_id)
+    except Exception as e:
+        logging.error(f"Error fetching Spotify track by URL: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not fetch track from Spotify")
 
 # --- ✅ NEW: Endpoint to delete feedback ---
 @app.delete("/feedback/{track_uri}")

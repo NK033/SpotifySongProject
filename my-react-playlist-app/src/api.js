@@ -137,6 +137,16 @@ export const createPlaylistAPI = async (playlistName, trackUris) => {
 };
 export const createSpotifyPlaylist = createPlaylistAPI;
 
+export const getSpotifyTrackByUrlAPI = async (trackUrl) => {
+  const headers = getAuthHeaders();
+  const response = await fetch(`${BASE_URL}/spotify_track?track_url=${encodeURIComponent(trackUrl)}`, { headers });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Failed to fetch Spotify track from URL');
+  }
+  return response.json();
+};
+
 /**
  * Deletes a pinned playlist.
  */

@@ -2,7 +2,7 @@
 import React from 'react';
 import SongCard from './SongCard';
 
-function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize, onCreatePlaylist }) {
+function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize, onCreatePlaylist, onRemoveSong }) {
   const { isUser, message, songs, recommendationText, playlistName } = item;
 
   return (
@@ -62,6 +62,7 @@ function ChatMessage({ item, onFeedback, onShowDetails, onPin, onSummarize, onCr
                   song={song}
                   onFeedback={onFeedback}
                   onShowDetails={onShowDetails}
+                  onRemoveSong={onRemoveSong}
                 />
               ))}
             </div>
